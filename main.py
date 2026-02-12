@@ -2,6 +2,10 @@ import sys
 import os
 import random
 import pygame
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
+ASSETS_DIR = BASE_DIR / "assets"
 
 # =========================
 # Configurações gerais
@@ -20,6 +24,9 @@ GRAVITY = 0.75
 PLAYER_SPEED = 5.2
 PLAYER_JUMP_FORCE = -14.2
 PLAYER_FRAME_TIME = 0.18
+PLAYER_SCALE = 1.8
+PLAYER_FEET_OFFSET = 0
+PLAYER_BASE_SIZE = (46, 60)
 PLAYER_FRAMES = [
     "images/player/soldier_walk1.png",
     "images/player/soldier_walk2.png",
@@ -46,7 +53,9 @@ BREAK_ZONE_LENGTH_MAX = 320
 PLATFORM_CHUNK_SIZE = 500
 PLATFORM_MAX_PER_CHUNK = 3
 
-DEBUG_PLATFORMS = True
+DEBUG_PLATFORMS = False  # Desativa overlays de debug: índices, linhas conectadas, info de chunk
+DEBUG_HITBOX = False     # Mostra contornos das hitboxes em amarelo
+DEBUG_UI = False         # Desativa informações técnicas na HUD (Active/CD, Jump H/D)
 
 GOAL_WIDTH = 60
 GOAL_HEIGHT = 90
@@ -54,6 +63,8 @@ GOAL_X_OFFSET = 250
 GOAL_SAFE_ZONE = 280
 GOAL_CLEAR_ZONE = 420
 GOAL_IMAGE_PATH = "images/goal/terminal.png"
+
+BG_PATH = "images/background/bg_gameplay.png"
 
 # Estados do jogo
 MENU = "menu"
@@ -70,6 +81,12 @@ BLUE = (70, 130, 220)
 RED = (220, 90, 90)
 YELLOW = (240, 200, 80)
 GRAY = (120, 120, 120)
+
+# Cores das plataformas - Neon Cyber
+PLATFORM_FILL = (36, 52, 92)         # azul escuro
+PLATFORM_TOP = (0, 232, 255)         # ciano neon
+PLATFORM_GLOW = (178, 68, 255)       # roxo neon (detalhe)
+PLATFORM_SHADOW = (12, 18, 40)       # sombra
 
 CAMERA_DEAD_LEFT_RATIO = 0.28
 CAMERA_DEAD_RIGHT_RATIO = 0.52
@@ -103,6 +120,33 @@ ENEMY_FRAME_TIME = 0.18
 HIT_FLASH_TIME = 0.18
 
 
+def load_background(rel_path: str, screen_w: int, screen_h: int):
+    """
+    Carrega fundo simples e opaco, escalado para tamanho da tela.
+    Fallback seguro: Surface opaca escura.
+    """
+    full = ASSETS_DIR / rel_path
+    if not full.exists():
+        print(f"[BG] Arquivo nao encontrado: {full}. Usando fallback.")
+        surf = pygame.Surface((screen_w, screen_h))
+        surf.fill((10, 12, 22))
+        return surf.convert()
+
+    try:
+        img = pygame.image.load(str(full))
+        # Escalar para tamanho exato da tela
+        if img.get_size() != (screen_w, screen_h):
+            img = pygame.transform.smoothscale(img, (screen_w, screen_h))
+        img = img.convert()
+        print(f"[BG] Carregado: {full.name} size={img.get_size()}")
+        return img
+    except Exception as e:
+        print(f"[BG] Erro ao carregar {full}: {e}")
+        surf = pygame.Surface((screen_w, screen_h))
+        surf.fill((10, 12, 22))
+        return surf.convert()
+
+
 class Camera:
     def __init__(self, screen_w, screen_h, world_w, world_h):
         self.screen_w = screen_w
@@ -133,16 +177,21 @@ class Camera:
 
 class Player:
     def __init__(self, frames=None):
-        self.w = 46
-        self.h = 60
+        scaled_w = int(PLAYER_BASE_SIZE[0] * PLAYER_SCALE)
+        scaled_h = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)
+        self.w = scaled_w
+        self.h = scaled_h
         self.x = 140
-        self.y = GROUND_Y - self.h
+        self.y = GROUND_Y - self.h + PLAYER_FEET_OFFSET
         self.vx = 0
         self.vy = 0
         self.speed = PLAYER_SPEED
         self.jump_force = PLAYER_JUMP_FORCE
         self.on_ground = True
         self.frames = frames or []
+        if self.frames:
+            self.w, self.h = self.frames[0].get_size()
+            self.y = GROUND_Y - self.h + PLAYER_FEET_OFFSET
         self.frame_index = 0
         self.frame_timer = 0.0
         self.facing = 1
@@ -172,7 +221,7 @@ class Player:
 
         # Colisão com chão
         if self.y + self.h >= GROUND_Y:
-            self.y = GROUND_Y - self.h
+            self.y = GROUND_Y - self.h + PLAYER_FEET_OFFSET
             self.vy = 0
             self.on_ground = True
         else:
@@ -184,7 +233,7 @@ class Player:
                 if self.rect.right <= platform.rect.left or self.rect.left >= platform.rect.right:
                     continue
                 if prev_bottom <= platform.rect.top and self.y + self.h >= platform.rect.top:
-                    self.y = platform.rect.top - self.h
+                    self.y = platform.rect.top - self.h + PLAYER_FEET_OFFSET
                     self.vy = 0
                     self.on_ground = True
                     break
@@ -306,7 +355,31 @@ class Platform:
 
     def draw(self, surface, camera):
         screen_rect = camera.apply_rect(self.rect)
-        pygame.draw.rect(surface, (70, 130, 90), screen_rect, border_radius=4)
+        
+        # Sombra deslocada (3 px para baixo)
+        shadow_rect = screen_rect.copy()
+        shadow_rect.y += 3
+        pygame.draw.rect(surface, PLATFORM_SHADOW, shadow_rect, border_radius=6)
+        
+        # Corpo principal - azul escuro
+        pygame.draw.rect(surface, PLATFORM_FILL, screen_rect, border_radius=6)
+        
+        # Linha superior neon - 3 px de altura
+        if screen_rect.h >= 3:
+            top_line = pygame.Rect(screen_rect.x, screen_rect.y, screen_rect.w, 3)
+            pygame.draw.rect(surface, PLATFORM_TOP, top_line)
+        
+        # Detalhe roxo neon no centro (1 linha curta, 60% da largura)
+        if screen_rect.h >= 8 and screen_rect.w >= 20:
+            center_y = screen_rect.centery
+            detail_w = int(screen_rect.w * 0.6)
+            detail_x = screen_rect.x + (screen_rect.w - detail_w) // 2
+            detail_rect = pygame.Rect(detail_x, center_y - 1, detail_w, 2)
+            pygame.draw.rect(surface, PLATFORM_GLOW, detail_rect)
+        
+        # Debug: desenhar hitbox contorno em amarelo
+        if DEBUG_HITBOX:
+            pygame.draw.rect(surface, YELLOW, screen_rect, width=2)
 
 
 class Goal:
@@ -337,17 +410,26 @@ def draw_text(surface, text, font, color, x, y, center=False):
     surface.blit(img, rect)
 
 
-def load_image(relative_path, size=None):
+def load_image(relative_path, size=None, alpha=True, fallback_color=(60, 60, 60), fallback_size=None):
     full_path = os.path.join(os.path.dirname(__file__), "assets", relative_path)
     if not os.path.exists(full_path):
-        return None
+        size = fallback_size or size or (64, 64)
+        print(f"[img] Arquivo nao encontrado: {relative_path}. Usando fallback.")
+        surface = pygame.Surface(size, pygame.SRCALPHA) if alpha else pygame.Surface(size)
+        surface.fill(fallback_color)
+        return surface.convert_alpha() if alpha else surface.convert()
     try:
-        image = pygame.image.load(full_path).convert_alpha()
+        image = pygame.image.load(full_path)
+        image = image.convert_alpha() if alpha else image.convert()
         if size:
             image = pygame.transform.smoothscale(image, size)
         return image
     except pygame.error:
-        return None
+        size = fallback_size or size or (64, 64)
+        print(f"[img] Falha ao carregar: {relative_path}. Usando fallback.")
+        surface = pygame.Surface(size, pygame.SRCALPHA) if alpha else pygame.Surface(size)
+        surface.fill(fallback_color)
+        return surface.convert_alpha() if alpha else surface.convert()
 
 
 def load_sound(relative_path):
@@ -587,6 +669,11 @@ class SpawnManager:
 
 
 def main():
+    print("\\n" + "="*60)
+    print("INICIO DO JOGO - DIAGNOSTICO ATIVADO")
+    print("="*60 + "\\n")
+    sys.stdout.flush()
+    
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption(TITLE)
@@ -598,7 +685,9 @@ def main():
 
     state = MENU
 
-    player_frames = [load_image(frame_path, (46, 60)) for frame_path in PLAYER_FRAMES]
+    player_w = int(PLAYER_BASE_SIZE[0] * PLAYER_SCALE)
+    player_h = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)
+    player_frames = [load_image(frame_path, (player_w, player_h)) for frame_path in PLAYER_FRAMES]
     player_frames = [frame for frame in player_frames if frame is not None]
     player = Player(frames=player_frames)
     coins, platforms, main_route, platform_debug, goal = build_level()
@@ -606,7 +695,10 @@ def main():
     enemies = []
     effects = []
     camera = Camera(WIDTH, HEIGHT, WORLD_W, WORLD_H)
-    background = load_image("images/background/sky.png")
+    
+    # Carregar fundo único e fixo
+    bg_gameplay = load_background(BG_PATH, WIDTH, HEIGHT)
+    
     goal_image = load_image(GOAL_IMAGE_PATH, (GOAL_WIDTH, GOAL_HEIGHT))
     goal.image = goal_image
     enemy_frames = [
@@ -619,6 +711,7 @@ def main():
     score = 0
     best_score = 0
     time_survived = 0.0
+    score_time_acc = 0.0
 
     running = True
     while running:
@@ -643,6 +736,7 @@ def main():
                         kills = 0
                         score = 0
                         time_survived = 0.0
+                        score_time_acc = 0.0
                         state = PLAYING
                     elif event.key == pygame.K_ESCAPE:
                         running = False
@@ -670,6 +764,7 @@ def main():
                         kills = 0
                         score = 0
                         time_survived = 0.0
+                        score_time_acc = 0.0
                         state = PLAYING
                     elif event.key == pygame.K_m:
                         state = MENU
@@ -756,9 +851,12 @@ def main():
                     remaining_coins.append(c)
             coins = remaining_coins
 
-            # Pontuação por tempo
+            # Pontuação por tempo - 1 ponto por segundo real
             time_survived += dt
-            score += 1
+            score_time_acc += dt
+            while score_time_acc >= 1.0:
+                score += 1
+                score_time_acc -= 1.0
 
             # Efeitos de hit
             updated_effects = []
@@ -770,17 +868,6 @@ def main():
 
         # ========= Draw =========
         screen.fill(BG_COLOR)
-
-        if background:
-            bg_x = -camera.x * 0.5
-            screen.blit(background, (bg_x, 0))
-
-        # Chão (mundo)
-        ground_rect = pygame.Rect(0, GROUND_Y, WORLD_W, HEIGHT - GROUND_Y)
-        pygame.draw.rect(screen, GREEN, camera.apply_rect(ground_rect))
-        line_start = camera.apply_pos(0, GROUND_Y)
-        line_end = camera.apply_pos(WORLD_W, GROUND_Y)
-        pygame.draw.line(screen, (50, 110, 70), line_start, line_end, 3)
 
         if state == MENU:
             draw_text(screen, "CyberShield: Virus Hunt ", font_title, WHITE, WIDTH // 2, 110, center=True)
@@ -795,6 +882,16 @@ def main():
             draw_text(screen, "ESC : Voltar para o menu / Sair", font_small, WHITE, WIDTH // 2, 470, center=True)
 
         elif state == PLAYING:
+            # Fundo fixo único
+            screen.blit(bg_gameplay, (0, 0))
+
+            # Chao (mundo)
+            ground_rect = pygame.Rect(0, GROUND_Y, WORLD_W, HEIGHT - GROUND_Y)
+            pygame.draw.rect(screen, GREEN, camera.apply_rect(ground_rect))
+            line_start = camera.apply_pos(0, GROUND_Y)
+            line_end = camera.apply_pos(WORLD_W, GROUND_Y)
+            pygame.draw.line(screen, (50, 110, 70), line_start, line_end, 3)
+
             for platform in platforms:
                 platform.draw(screen, camera)
 
@@ -851,14 +948,15 @@ def main():
             progress = clamp((player.rect.centerx / WORLD_W) * 100, 0, 100)
             draw_text(screen, f"Progresso: {progress:05.1f}%", font_small, WHITE, WIDTH - 220, 52)
             draw_text(screen, "Objetivo: alcançar o terminal no fim do mapa", font_small, GRAY, WIDTH - 420, 78)
-            draw_text(
-                screen,
-                f"Active {spawn_debug['active']} | CD {spawn_debug['global_cd']:.2f}s",
-                font_small,
-                GRAY,
-                20,
-                104,
-            )
+            if DEBUG_UI:
+                draw_text(
+                    screen,
+                    f"Active {spawn_debug['active']} | CD {spawn_debug['global_cd']:.2f}s",
+                    font_small,
+                    GRAY,
+                    20,
+                    104,
+                )
             if DEBUG_PLATFORMS:
                 draw_text(
                     screen,
