@@ -26,11 +26,14 @@ PLAYER_JUMP_FORCE = -14.2
 PLAYER_FRAME_TIME = 0.18
 PLAYER_SCALE = 1.8
 PLAYER_FEET_OFFSET = 0
+RUN_ANIM_INTERVAL = 0.12  # Intervalo entre frames de corrida
 PLAYER_BASE_SIZE = (46, 60)
-PLAYER_FRAMES = [
-    "images/player/soldier_walk1.png",
-    "images/player/soldier_walk2.png",
-]
+
+# Sprites do player (direita - será espelhado para esquerda)
+PLAYER_IDLE_RIGHT = "images/player/player_idle_right.png"
+PLAYER_RUN1_RIGHT = "images/player/player_run1_right.png"
+PLAYER_RUN_MID_RIGHT = "images/player/player_run_mid_right.png"
+PLAYER_RUN2_RIGHT = "images/player/player_run2_right.png"
 
 MAX_JUMP_HEIGHT = int((abs(PLAYER_JUMP_FORCE) ** 2) / (2 * GRAVITY))
 MAX_JUMP_DISTANCE = int(PLAYER_SPEED * (2 * (abs(PLAYER_JUMP_FORCE) / GRAVITY)))
@@ -176,11 +179,20 @@ class Camera:
 
 
 class Player:
-    def __init__(self, frames=None):
-        scaled_w = int(PLAYER_BASE_SIZE[0] * PLAYER_SCALE)
-        scaled_h = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)
-        self.w = scaled_w
-        self.h = scaled_h
+    def __init__(self, sprites=None):
+        """
+        sprites: dict com idle_right, idle_left, run1_right, run1_left, run_mid_right, run_mid_left, run2_right, run2_left, width, height
+        """
+        if sprites:
+            self.sprites = sprites
+            self.w = sprites['width']
+            self.h = sprites['height']
+        else:
+            # Fallback: tamanho base escalado
+            self.w = int(PLAYER_BASE_SIZE[0] * PLAYER_SCALE)
+            self.h = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)
+            self.sprites = None
+        
         self.x = 140
         self.y = GROUND_Y - self.h + PLAYER_FEET_OFFSET
         self.vx = 0
@@ -188,13 +200,13 @@ class Player:
         self.speed = PLAYER_SPEED
         self.jump_force = PLAYER_JUMP_FORCE
         self.on_ground = True
-        self.frames = frames or []
-        if self.frames:
-            self.w, self.h = self.frames[0].get_size()
-            self.y = GROUND_Y - self.h + PLAYER_FEET_OFFSET
-        self.frame_index = 0
-        self.frame_timer = 0.0
-        self.facing = 1
+        
+        # Animação
+        self.direction = "right"  # "right" ou "left"
+        self.state = "idle"       # "idle" ou "running"
+        self.run_timer = 0.0
+        self.run_frame = 0        # 0 = run1, 1 = run_mid, 2 = run2, 3 = run_mid
+        
         self.rect = pygame.Rect(int(self.x), int(self.y), self.w, self.h)
 
     def update(self, keys, world_w, platforms, dt):
@@ -202,16 +214,26 @@ class Player:
         self.vx = 0
         if keys[pygame.K_a] or keys[pygame.K_LEFT]:
             self.vx = -self.speed
+            self.direction = "left"
         if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
             self.vx = self.speed
+            self.direction = "right"
 
         self.x += self.vx
         self.x = max(0, min(world_w - self.w, self.x))
 
-        if self.vx < 0:
-            self.facing = -1
-        elif self.vx > 0:
-            self.facing = 1
+        # Atualizar estado de animação
+        if abs(self.vx) > 0 and self.on_ground:
+            self.state = "running"
+            # Alternar entre 4 frames: run1 -> run_mid -> run2 -> run_mid (loop)
+            self.run_timer += dt
+            if self.run_timer >= RUN_ANIM_INTERVAL:
+                self.run_timer = 0.0
+                self.run_frame = (self.run_frame + 1) % 4
+        else:
+            self.state = "idle"
+            self.run_frame = 0
+            self.run_timer = 0.0
 
         # Gravidade / vertical
         prev_bottom = self.y + self.h
@@ -240,14 +262,6 @@ class Player:
 
         self.rect.topleft = (int(self.x), int(self.y))
 
-        if len(self.frames) > 1 and abs(self.vx) > 0:
-            self.frame_timer += dt
-            if self.frame_timer >= PLAYER_FRAME_TIME:
-                self.frame_timer = 0.0
-                self.frame_index = (self.frame_index + 1) % len(self.frames)
-        elif abs(self.vx) == 0:
-            self.frame_index = 0
-
     def jump(self):
         if self.on_ground:
             self.vy = self.jump_force
@@ -255,12 +269,23 @@ class Player:
 
     def draw(self, surface, camera):
         screen_rect = camera.apply_rect(self.rect)
-        if self.frames:
-            frame = self.frames[self.frame_index]
-            if self.facing < 0:
-                frame = pygame.transform.flip(frame, True, False)
-            surface.blit(frame, screen_rect.topleft)
+        
+        if self.sprites:
+            # Selecionar sprite baseado em estado e direção
+            if self.state == "idle":
+                sprite_key = f"idle_{self.direction}"
+            elif self.state == "running":
+                # Ciclo de 4 frames: run1 -> run_mid -> run2 -> run_mid
+                frame_names = ["run1", "run_mid", "run2", "run_mid"]
+                frame_name = frame_names[self.run_frame]
+                sprite_key = f"{frame_name}_{self.direction}"
+            else:
+                sprite_key = f"idle_{self.direction}"
+            
+            sprite = self.sprites.get(sprite_key, self.sprites['idle_right'])
+            surface.blit(sprite, screen_rect.topleft)
         else:
+            # Fallback: retângulo azul
             pygame.draw.rect(surface, BLUE, screen_rect, border_radius=8)
             # detalhe simples
             eye = pygame.Rect(screen_rect.x + 28, screen_rect.y + 14, 8, 8)
@@ -410,6 +435,83 @@ def draw_text(surface, text, font, color, x, y, center=False):
     surface.blit(img, rect)
 
 
+def load_menu_bg(rel_path: str, screen_w: int, screen_h: int):
+    """
+    Carrega background do menu com fallback seguro.
+    """
+    full = ASSETS_DIR / rel_path
+    if not full.exists():
+        print(f"[Menu BG] Arquivo nao encontrado: {full}. Usando fallback.")
+        surf = pygame.Surface((screen_w, screen_h))
+        surf.fill((15, 20, 35))  # Azul escuro para fallback
+        try:
+            return surf.convert()
+        except:
+            return surf
+
+    try:
+        img = pygame.image.load(str(full))
+        if img.get_size() != (screen_w, screen_h):
+            img = pygame.transform.smoothscale(img, (screen_w, screen_h))
+        try:
+            img = img.convert()
+        except:
+            pass  # Fallback para imagem sem convert em headless mode
+        print(f"[Menu BG] Carregado: {full.name} size={img.get_size()}")
+        return img
+    except Exception as e:
+        print(f"[Menu BG] Erro ao carregar {full}: {e}")
+        surf = pygame.Surface((screen_w, screen_h))
+        surf.fill((15, 20, 35))
+        try:
+            return surf.convert()
+        except:
+            return surf
+
+
+class Button:
+    """Botão do menu com suporte a mouse e teclado."""
+    def __init__(self, label, x, y, width=200, height=50):
+        self.label = label
+        self.rect = pygame.Rect(x, y, width, height)
+        self.is_hovered = False
+        self.is_selected = False
+    
+    def update_hover(self, mouse_pos):
+        """Atualiza estado de hover baseado em posição do mouse."""
+        self.is_hovered = self.rect.collidepoint(mouse_pos)
+    
+    def draw(self, surface, font, selected=False):
+        """Desenha botão com estilo cyber."""
+        # Cores base
+        if selected or self.is_hovered:
+            fill_color = (20, 70, 150)  # Azul mais claro no hover
+            border_color = (0, 255, 255)  # Ciano neon
+            border_width = 3
+            text_color = (255, 255, 255)  # Branco brilhante
+        else:
+            fill_color = (25, 45, 90)  # Azul escuro
+            border_color = (0, 180, 220)  # Ciano opaco
+            border_width = 2
+            text_color = (200, 200, 200)  # Branco opaco
+        
+        # Desenhar fundo
+        pygame.draw.rect(surface, fill_color, self.rect, border_radius=8)
+        
+        # Desenhar borda neon
+        pygame.draw.rect(surface, border_color, self.rect, width=border_width, border_radius=8)
+        
+        # Desenhar texto
+        text_img = font.render(self.label, True, text_color)
+        text_rect = text_img.get_rect(center=self.rect.center)
+        surface.blit(text_img, text_rect)
+
+
+def draw_button(surface, button, font, selected=False):
+    """Desenha um botão do menu."""
+    button.draw(surface, font, selected)
+
+
 def load_image(relative_path, size=None, alpha=True, fallback_color=(60, 60, 60), fallback_size=None):
     full_path = os.path.join(os.path.dirname(__file__), "assets", relative_path)
     if not os.path.exists(full_path):
@@ -440,6 +542,178 @@ def load_sound(relative_path):
         return pygame.mixer.Sound(full_path)
     except pygame.error:
         return None
+
+
+def load_player_sprites(scale=1.8, feet_offset=0):
+    """
+    Carrega sprites do player (idle, run1, run2) para direita e cria versões espelhadas para esquerda.
+    Retorna: dict com {
+        'idle_right', 'idle_left',
+        'run1_right', 'run1_left',
+        'run_mid_right', 'run_mid_left',
+        'run2_right', 'run2_left',
+        'width', 'height'
+    }
+    """
+    # Calcular tamanho final
+    scaled_w = int(PLAYER_BASE_SIZE[0] * scale)
+    scaled_h = int(PLAYER_BASE_SIZE[1] * scale)
+    size = (scaled_w, scaled_h)
+    
+    # Carregar sprites da direita (usando função load_image que já tem fallback robusto)
+    idle_right = load_image(PLAYER_IDLE_RIGHT, size=size, alpha=True, 
+                           fallback_color=(70, 130, 220), fallback_size=size)
+    run1_right = load_image(PLAYER_RUN1_RIGHT, size=size, alpha=True,
+                           fallback_color=(70, 130, 220), fallback_size=size)
+    run_mid_right = load_image(PLAYER_RUN_MID_RIGHT, size=size, alpha=True,
+                           fallback_color=(70, 130, 220), fallback_size=size)
+    # Se run_mid falhar, usar run1 como fallback
+    if run_mid_right.get_size() == size and run_mid_right.get_at((0,0)).a == 0:
+        run_mid_right = run1_right
+    run2_right = load_image(PLAYER_RUN2_RIGHT, size=size, alpha=True,
+                           fallback_color=(70, 130, 220), fallback_size=size)
+    
+    # Criar versões espelhadas para esquerda (flip horizontal)
+    try:
+        idle_left = pygame.transform.flip(idle_right, True, False)
+        run1_left = pygame.transform.flip(run1_right, True, False)
+        run_mid_left = pygame.transform.flip(run_mid_right, True, False)
+        run2_left = pygame.transform.flip(run2_right, True, False)
+    except pygame.error:
+        # Fallback: copiar as mesmas imagens se flip falhar
+        idle_left = idle_right
+        run1_left = run1_right
+        run_mid_left = run_mid_right
+        run2_left = run2_right
+    
+    return {
+        'idle_right': idle_right,
+        'idle_left': idle_left,
+        'run1_right': run1_right,
+        'run1_left': run1_left,
+        'run_mid_right': run_mid_right,
+        'run_mid_left': run_mid_left,
+        'run2_right': run2_right,
+        'run2_left': run2_left,
+        'width': scaled_w,
+        'height': scaled_h,
+    }
+
+
+def draw_menu(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui, show_controls=False):
+    """
+    Renderiza o menu com background, overlay, título, botões e opcionalmente controles.
+    """
+    # Desenhar background
+    screen.blit(menu_bg, (0, 0))
+    
+    # Aplicar overlay escuro semitransparente para legibilidade
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.set_alpha(100)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+    
+    # Título
+    draw_text(screen, "PYTHON 2D GAME DEMO", font_title, WHITE, WIDTH // 2, 80, center=True)
+    
+    # Desenhar botões
+    for idx, button in enumerate(buttons):
+        is_selected = (idx == selected_button_idx)
+        draw_button(screen, button, font_ui, selected=is_selected)
+    
+    # Se mostrando controles, exibir no lugar dos botões
+    if show_controls:
+        draw_text(screen, "CONTROLES", font_ui, YELLOW, WIDTH // 2, 200, center=True)
+        draw_text(screen, "A/D ou <-/-> : Mover | SPACE/W/^ : Pular", 
+                 pygame.font.SysFont("arial", 20), WHITE, WIDTH // 2, 260, center=True)
+        draw_text(screen, "F : Atirar | ESC : Menu", 
+                 pygame.font.SysFont("arial", 20), WHITE, WIDTH // 2, 290, center=True)
+        draw_text(screen, "[Pressione ESC para voltar]", 
+                 pygame.font.SysFont("arial", 18), GRAY, WIDTH // 2, 400, center=True)
+
+
+def draw_generic_menu_screen(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui,
+                             screen_title, subtitle="", title_color=WHITE):
+    """
+    Renderiza tela genérica (menu, game_over, etc) com background, overlay, título, botões.
+    Reutilizável para múltiplas telas com visual consistente.
+    """
+    # Desenhar background
+    screen.blit(menu_bg, (0, 0))
+    
+    # Aplicar overlay escuro semitransparente para legibilidade
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.set_alpha(100)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+    
+    # Título principal
+    draw_text(screen, screen_title, font_title, title_color, WIDTH // 2, 100, center=True)
+    
+    # Subtítulo se fornecido
+    if subtitle:
+        draw_text(screen, subtitle, pygame.font.SysFont("arial", 22), YELLOW, 
+                 WIDTH // 2, 160, center=True)
+    
+    # Desenhar botões
+    for idx, button in enumerate(buttons):
+        is_selected = (idx == selected_button_idx)
+        draw_button(screen, button, font_ui, selected=is_selected)
+
+
+def handle_generic_screen_input(event, screen_state, num_buttons=3):
+    """
+    Processa input genérico para telas com botões (menu, game_over, etc).
+    Retorna: (new_selected_idx, action_index, show_controls)
+    action_index: índice do botão pressionado, ou None se nenhum
+    """
+    selected_idx = screen_state.get("selected", 0)
+    show_controls = screen_state.get("show_controls", False)
+    
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_UP:
+            selected_idx = (selected_idx - 1) % num_buttons
+            return selected_idx, None, show_controls
+        elif event.key == pygame.K_DOWN:
+            selected_idx = (selected_idx + 1) % num_buttons
+            return selected_idx, None, show_controls
+        elif event.key == pygame.K_RETURN:
+            # Retorna índice do botão selecionado como ação
+            return selected_idx, selected_idx, show_controls
+        elif event.key == pygame.K_ESCAPE:
+            # ESC cancela (retorna ação especial -1)
+            return selected_idx, -1, show_controls
+    
+    return selected_idx, None, show_controls
+
+
+def handle_menu_input(event, menu_state):
+    """
+    Processa input do menu (teclado e mouse).
+    Retorna: (new_selected_idx, action, show_controls)
+    Ações: None, 'play', 'controls', 'quit'
+    """
+    selected_idx = menu_state.get("selected", 0)
+    show_controls = menu_state.get("show_controls", False)
+    
+    if event.type == pygame.KEYDOWN:
+        if show_controls:
+            if event.key == pygame.K_ESCAPE:
+                return selected_idx, None, False
+        else:
+            if event.key == pygame.K_UP:
+                selected_idx = (selected_idx - 1) % 3
+                return selected_idx, None, show_controls
+            elif event.key == pygame.K_DOWN:
+                selected_idx = (selected_idx + 1) % 3
+                return selected_idx, None, show_controls
+            elif event.key == pygame.K_RETURN:
+                actions = ['play', 'controls', 'quit']
+                return selected_idx, actions[selected_idx], False
+            elif event.key == pygame.K_ESCAPE:
+                return selected_idx, 'quit', False
+    
+    return selected_idx, None, show_controls
 
 
 def clamp(value, min_value, max_value):
@@ -685,11 +959,9 @@ def main():
 
     state = MENU
 
-    player_w = int(PLAYER_BASE_SIZE[0] * PLAYER_SCALE)
-    player_h = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)
-    player_frames = [load_image(frame_path, (player_w, player_h)) for frame_path in PLAYER_FRAMES]
-    player_frames = [frame for frame in player_frames if frame is not None]
-    player = Player(frames=player_frames)
+    # Carregar sprites do player
+    player_sprites = load_player_sprites(scale=PLAYER_SCALE, feet_offset=PLAYER_FEET_OFFSET)
+    player = Player(sprites=player_sprites)
     coins, platforms, main_route, platform_debug, goal = build_level()
     bullets = []
     enemies = []
@@ -698,6 +970,23 @@ def main():
     
     # Carregar fundo único e fixo
     bg_gameplay = load_background(BG_PATH, WIDTH, HEIGHT)
+    
+    # Carregar menu background e criar botões
+    menu_bg = load_menu_bg("images/ui/menu_bg.png", WIDTH, HEIGHT)
+    buttons = [
+        Button("JOGAR", WIDTH // 2 - 100, 220, 200, 50),
+        Button("CONTROLES", WIDTH // 2 - 100, 290, 200, 50),
+        Button("SAIR", WIDTH // 2 - 100, 360, 200, 50),
+    ]
+    menu_state = {"selected": 0, "show_controls": False}
+    
+    # Botões para GAME_OVER (mesma posição vertical para consistência)
+    game_over_buttons = [
+        Button("REINICIAR", WIDTH // 2 - 100, 220, 200, 50),
+        Button("MENU PRINCIPAL", WIDTH // 2 - 100, 290, 200, 50),
+        Button("SAIR", WIDTH // 2 - 100, 360, 200, 50),
+    ]
+    game_over_state = {"selected": 0}
     
     goal_image = load_image(GOAL_IMAGE_PATH, (GOAL_WIDTH, GOAL_HEIGHT))
     goal.image = goal_image
@@ -723,23 +1012,57 @@ def main():
                 running = False
 
             if state == MENU:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN:
-                        # iniciar jogo
-                        player = Player(frames=player_frames)
-                        coins, platforms, main_route, platform_debug, goal = build_level()
-                        bullets = []
-                        enemies = []
-                        effects = []
-                        spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
-                        goal.image = goal_image
-                        kills = 0
-                        score = 0
-                        time_survived = 0.0
-                        score_time_acc = 0.0
-                        state = PLAYING
-                    elif event.key == pygame.K_ESCAPE:
-                        running = False
+                selected_idx, action, show_controls = handle_menu_input(event, menu_state)
+                menu_state["selected"] = selected_idx
+                menu_state["show_controls"] = show_controls
+                
+                if action == 'play':
+                    # Iniciar jogo
+                    player = Player(sprites=player_sprites)
+                    coins, platforms, main_route, platform_debug, goal = build_level()
+                    bullets = []
+                    enemies = []
+                    effects = []
+                    spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
+                    goal.image = goal_image
+                    kills = 0
+                    score = 0
+                    time_survived = 0.0
+                    score_time_acc = 0.0
+                    state = PLAYING
+                elif action == 'controls':
+                    menu_state["show_controls"] = True
+                elif action == 'quit':
+                    running = False
+                
+                # Atualizar hover do mouse
+                mouse_pos = pygame.mouse.get_pos()
+                for button in buttons:
+                    button.update_hover(mouse_pos)
+                
+                # Verificar clique em botões
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for idx, button in enumerate(buttons):
+                        if button.rect.collidepoint(mouse_pos):
+                            actions = ['play', 'controls', 'quit']
+                            action = actions[idx]
+                            if action == 'play':
+                                player = Player(sprites=player_sprites)
+                                coins, platforms, main_route, platform_debug, goal = build_level()
+                                bullets = []
+                                enemies = []
+                                effects = []
+                                spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
+                                goal.image = goal_image
+                                kills = 0
+                                score = 0
+                                time_survived = 0.0
+                                score_time_acc = 0.0
+                                state = PLAYING
+                            elif action == 'controls':
+                                menu_state["show_controls"] = True
+                            elif action == 'quit':
+                                running = False
 
             elif state == PLAYING:
                 if event.type == pygame.KEYDOWN:
@@ -751,10 +1074,19 @@ def main():
                         state = MENU
 
             elif state == GAME_OVER:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_r:
-                        # reinicia gameplay direto
-                        player = Player(frames=player_frames)
+                # Processar input com função genérica
+                selected_idx, action_idx, _ = handle_generic_screen_input(event, game_over_state, num_buttons=3)
+                game_over_state["selected"] = selected_idx
+                
+                # Atualizar hover do mouse
+                mouse_pos = pygame.mouse.get_pos()
+                for button in game_over_buttons:
+                    button.update_hover(mouse_pos)
+                
+                # Executar ação baseada no índice do botão ou input
+                if action_idx is not None:
+                    if action_idx == 0:  # REINICIAR
+                        player = Player(sprites=player_sprites)
                         coins, platforms, main_route, platform_debug, goal = build_level()
                         bullets = []
                         enemies = []
@@ -766,10 +1098,34 @@ def main():
                         time_survived = 0.0
                         score_time_acc = 0.0
                         state = PLAYING
-                    elif event.key == pygame.K_m:
+                    elif action_idx == 1:  # MENU PRINCIPAL
                         state = MENU
-                    elif event.key == pygame.K_ESCAPE:
+                    elif action_idx == 2:  # SAIR
                         running = False
+                    elif action_idx == -1:  # ESC = MENU PRINCIPAL
+                        state = MENU
+                
+                # Verificar clique em botões
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for idx, button in enumerate(game_over_buttons):
+                        if button.rect.collidepoint(mouse_pos):
+                            if idx == 0:  # REINICIAR
+                                player = Player(sprites=player_sprites)
+                                coins, platforms, main_route, platform_debug, goal = build_level()
+                                bullets = []
+                                enemies = []
+                                effects = []
+                                spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
+                                goal.image = goal_image
+                                kills = 0
+                                score = 0
+                                time_survived = 0.0
+                                score_time_acc = 0.0
+                                state = PLAYING
+                            elif idx == 1:  # MENU PRINCIPAL
+                                state = MENU
+                            elif idx == 2:  # SAIR
+                                running = False
 
             elif state == LEVEL_COMPLETE:
                 if event.type == pygame.KEYDOWN:
@@ -870,16 +1226,8 @@ def main():
         screen.fill(BG_COLOR)
 
         if state == MENU:
-            draw_text(screen, "CyberShield: Virus Hunt ", font_title, WHITE, WIDTH // 2, 110, center=True)
-            draw_text(screen, "ENTER - Iniciar", font_ui, WHITE, WIDTH // 2, 220, center=True)
-            draw_text(screen, "ESC - Sair", font_ui, WHITE, WIDTH // 2, 260, center=True)
-
-            # Requisito obrigatório: controles no menu
-            draw_text(screen, "CONTROLES", font_ui, YELLOW, WIDTH // 2, 340, center=True)
-            draw_text(screen, "A/D ou <-/-> : Mover", font_small, WHITE, WIDTH // 2, 380, center=True)
-            draw_text(screen, "SPACE / W / ^ : Pular", font_small, WHITE, WIDTH // 2, 410, center=True)
-            draw_text(screen, "F : Atirar", font_small, WHITE, WIDTH // 2, 440, center=True)
-            draw_text(screen, "ESC : Voltar para o menu / Sair", font_small, WHITE, WIDTH // 2, 470, center=True)
+            draw_menu(screen, menu_bg, buttons, menu_state["selected"], font_title, font_ui, 
+                     show_controls=menu_state["show_controls"])
 
         elif state == PLAYING:
             # Fundo fixo único
@@ -969,12 +1317,11 @@ def main():
             draw_text(screen, "ESC - Menu", font_small, GRAY, WIDTH - 160, 20)
 
         elif state == GAME_OVER:
-            draw_text(screen, "GAME OVER", font_title, WHITE, WIDTH // 2, 140, center=True)
-            draw_text(screen, f"Score final: {score}", font_ui, WHITE, WIDTH // 2, 230, center=True)
-            draw_text(screen, f"Melhor score: {max(best_score, score)}", font_ui, WHITE, WIDTH // 2, 270, center=True)
-            draw_text(screen, "R - Reiniciar", font_ui, YELLOW, WIDTH // 2, 340, center=True)
-            draw_text(screen, "M - Menu principal", font_ui, WHITE, WIDTH // 2, 380, center=True)
-            draw_text(screen, "ESC - Sair", font_ui, WHITE, WIDTH // 2, 420, center=True)
+            # Reutilizar função genérica com dados específicos de GAME_OVER
+            best_score = max(best_score, score)
+            subtitle = f"Score: {score} | Zumbis: {kills} | Melhor: {best_score}"
+            draw_generic_menu_screen(screen, menu_bg, game_over_buttons, game_over_state["selected"],
+                                    font_title, font_ui, "GAME OVER", subtitle=subtitle)
 
         elif state == LEVEL_COMPLETE:
             draw_text(screen, "FASE 1 CONCLUÍDA", font_title, WHITE, WIDTH // 2, 150, center=True)
