@@ -1,6 +1,7 @@
 import sys
 import os
 import random
+import re
 import pygame
 from pathlib import Path
 
@@ -32,8 +33,43 @@ PLAYER_BASE_SIZE = (46, 60)
 # Sprites do player (direita - será espelhado para esquerda)
 PLAYER_IDLE_RIGHT = "images/player/player_idle_right.png"
 PLAYER_RUN1_RIGHT = "images/player/player_run1_right.png"
-PLAYER_RUN_MID_RIGHT = "images/player/player_run_mid_right.png"
 PLAYER_RUN2_RIGHT = "images/player/player_run2_right.png"
+
+# Sprite sheet warpgal (player principal)
+WARPGAL_SHEET    = "images/player/warpgal-anim-sheet-alpha.png"
+WARPGAL_FRAME_W  = 72    # largura de cada frame no sheet
+WARPGAL_FRAME_H  = 72    # altura de cada frame no sheet
+WARPGAL_IDLE_ROW = 0     # row 0 = animação idle
+WARPGAL_RUN_ROW  = 1     # row 1 = animação de corrida
+
+# Fallback para sprites recortados manualmente (arquivos individuais)
+PLAYER_SPLIT_GLOB = "images/player/Layer 1_sprite_*.png"
+PLAYER_SPLIT_IDLE_IDX = 1
+PLAYER_SPLIT_RUN1_IDX = 3
+PLAYER_SPLIT_RUN2_IDX = 6
+
+# Grupos de animação para sprites recortados (índices dos arquivos Layer 1_sprite_XXX)
+# Ajuste estes índices para mapear cada animação aos frames corretos
+#
+# Estrutura identificada pela análise de bounding box:
+#   frames 1-12:    ciclo de corrida/caminhada (bw oscila 15→31→15 = balanço de braços)
+#   frames 13, 28, 43: fim de cada ciclo, pose levemente diferente (cy=26.5) → agachado
+#   frames 105-116: corrida mais ampla / mais pixels (braços mais abertos)
+#   frames 118,131,144: compactos (bh=24, cy=35.5) com braço à frente → atirar agachado
+#   frames 182-193: salto (bh ≥ 39, cy ≤ 27, conteúdo no topo do sprite)
+#   frames 130-142: postura larga (bw até 41) → atirar
+ANIM_IDLE_FRAMES   = [1]                                             # frame mais estreito = parado
+ANIM_RUN_FRAMES    = [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]          # ciclo completo de corrida
+ANIM_CROUCH_FRAMES = [13, 28, 43]                                    # pose fim-de-ciclo (cy=26.5)
+ANIM_JUMP_FRAMES   = [182, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193]
+ANIM_SHOOT_FRAMES  = [118, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142]
+ANIM_FRAME_SPEED   = 0.09  # segundos por frame
+
+# Sprite sheet bullet
+BULLET_SHEET     = "images/bullets/shooties-alpha.png"
+BULLET_FRAME_W   = 16    # largura de cada frame de bullet
+BULLET_FRAME_H   = 32    # altura de cada frame de bullet
+BULLET_FRAME_IDX = 3     # índice do frame a usar (0–6)
 
 MAX_JUMP_HEIGHT = int((abs(PLAYER_JUMP_FORCE) ** 2) / (2 * GRAVITY))
 MAX_JUMP_DISTANCE = int(PLAYER_SPEED * (2 * (abs(PLAYER_JUMP_FORCE) / GRAVITY)))
@@ -181,18 +217,26 @@ class Camera:
 class Player:
     def __init__(self, sprites=None):
         """
-        sprites: dict com idle_right, idle_left, run1_right, run1_left, run_mid_right, run_mid_left, run2_right, run2_left, width, height
+        sprites: dict com idle_right, idle_left, run1_right, run1_left, run2_right, run2_left,
+                 width, height — e opcionalmente 'all_frames' (dict idx->Surface) e 'size'.
         """
         if sprites:
             self.sprites = sprites
             self.w = sprites['width']
             self.h = sprites['height']
+            # Suporte a multi-frame: todos os frames recortados
+            self._all_frames_r = sprites.get('all_frames', {})
+            self._all_frames_l = {
+                k: pygame.transform.flip(v, True, False)
+                for k, v in self._all_frames_r.items()
+            }
         else:
-            # Fallback: tamanho base escalado
             self.w = int(PLAYER_BASE_SIZE[0] * PLAYER_SCALE)
             self.h = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)
             self.sprites = None
-        
+            self._all_frames_r = {}
+            self._all_frames_l = {}
+
         self.x = 140
         self.y = GROUND_Y - self.h + PLAYER_FEET_OFFSET
         self.vx = 0
@@ -200,38 +244,71 @@ class Player:
         self.speed = PLAYER_SPEED
         self.jump_force = PLAYER_JUMP_FORCE
         self.on_ground = True
-        
+        self.crouching = False
+
         # Animação
-        self.direction = "right"  # "right" ou "left"
-        self.state = "idle"       # "idle" ou "running"
-        self.run_timer = 0.0
-        self.run_frame = 0        # 0 = run1, 1 = run_mid, 2 = run2, 3 = run_mid
-        
+        self.direction = "right"       # "right" | "left"
+        self.state = "idle"            # idle | running | crouching | airborne
+        self.run_timer = 0.0           # legado – run com 2 frames
+        self.run_frame = 0             # legado – 0=run1 1=run2
+        self.anim_frame = 0            # índice dentro da sequência atual
+        self.anim_timer = 0.0          # acumulador de tempo para avançar frame
+        self.shoot_timer = 0.0         # tempo restante da animação de tiro
+        self._prev_anim_seq_id = "idle"
+
         self.rect = pygame.Rect(int(self.x), int(self.y), self.w, self.h)
 
     def update(self, keys, world_w, platforms, dt):
-        # Movimento horizontal
+        # Agachar: bloqueia movimento horizontal e pulo
+        self.crouching = (keys[pygame.K_s] or keys[pygame.K_DOWN]) and self.on_ground
+
+        # Movimento horizontal (bloqueado ao agachar)
         self.vx = 0
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            self.vx = -self.speed
-            self.direction = "left"
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            self.vx = self.speed
-            self.direction = "right"
+        if not self.crouching:
+            if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+                self.vx = -self.speed
+                self.direction = "left"
+            if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+                self.vx = self.speed
+                self.direction = "right"
 
         self.x += self.vx
         self.x = max(0, min(world_w - self.w, self.x))
 
-        # Atualizar estado de animação
-        if abs(self.vx) > 0 and self.on_ground:
+        # Máquina de estados de animação
+        if self.crouching:
+            self.state = "crouching"
+        elif not self.on_ground:
+            self.state = "airborne"
+        elif abs(self.vx) > 0:
             self.state = "running"
-            # Alternar entre 4 frames: run1 -> run_mid -> run2 -> run_mid (loop)
+        else:
+            self.state = "idle"
+
+        # Contador de tiro
+        if self.shoot_timer > 0:
+            self.shoot_timer -= dt
+
+        # Avança animação multi-frame (sprites recortados)
+        if self._all_frames_r:
+            seq = self.get_anim_seq()
+            seq_id = "shoot" if self.shoot_timer > 0 else self.state
+            if seq_id != self._prev_anim_seq_id:
+                self.anim_frame = 0
+                self.anim_timer = 0.0
+            self._prev_anim_seq_id = seq_id
+            self.anim_timer += dt
+            if self.anim_timer >= ANIM_FRAME_SPEED:
+                self.anim_timer -= ANIM_FRAME_SPEED
+                self.anim_frame = (self.anim_frame + 1) % len(seq)
+
+        # Animação legado run1/run2 (sprites dict)
+        if self.state == "running":
             self.run_timer += dt
             if self.run_timer >= RUN_ANIM_INTERVAL:
                 self.run_timer = 0.0
-                self.run_frame = (self.run_frame + 1) % 4
+                self.run_frame = (self.run_frame + 1) % 2
         else:
-            self.state = "idle"
             self.run_frame = 0
             self.run_timer = 0.0
 
@@ -263,31 +340,61 @@ class Player:
         self.rect.topleft = (int(self.x), int(self.y))
 
     def jump(self):
-        if self.on_ground:
+        if self.on_ground and not self.crouching:
             self.vy = self.jump_force
             self.on_ground = False
 
+    def get_anim_seq(self):
+        """Retorna a lista de índices de frames para o estado atual."""
+        if self.shoot_timer > 0 and self.on_ground:
+            return ANIM_SHOOT_FRAMES
+        s = self.state
+        if s == "crouching":
+            return ANIM_CROUCH_FRAMES
+        if s == "airborne":
+            return ANIM_JUMP_FRAMES
+        if s == "running":
+            return ANIM_RUN_FRAMES
+        return ANIM_IDLE_FRAMES
+
+    def trigger_shoot(self):
+        """Inicia a animação de tiro."""
+        self.shoot_timer = ANIM_FRAME_SPEED * len(ANIM_SHOOT_FRAMES)
+        self.anim_frame = 0
+        self.anim_timer = 0.0
+
     def draw(self, surface, camera):
         screen_rect = camera.apply_rect(self.rect)
-        
+
+        # --- Multi-frame sprites (PNGs recortados) ---
+        if self._all_frames_r:
+            seq = self.get_anim_seq()
+            fi = self.anim_frame % len(seq)
+            idx = seq[fi]
+            fd = self._all_frames_r if self.direction == "right" else self._all_frames_l
+            sprite = fd.get(idx)
+            if sprite:
+                # Centraliza horizontalmente e ancora o pé na base do rect
+                sw, sh = sprite.get_size()
+                draw_x = screen_rect.x + (screen_rect.w - sw) // 2
+                draw_y = screen_rect.bottom - sh
+                surface.blit(sprite, (draw_x, draw_y))
+                return
+
+        # --- Legacy sprites dict (idle/run1/run2) ---
         if self.sprites:
-            # Selecionar sprite baseado em estado e direção
             if self.state == "idle":
                 sprite_key = f"idle_{self.direction}"
             elif self.state == "running":
-                # Ciclo de 4 frames: run1 -> run_mid -> run2 -> run_mid
-                frame_names = ["run1", "run_mid", "run2", "run_mid"]
-                frame_name = frame_names[self.run_frame]
-                sprite_key = f"{frame_name}_{self.direction}"
+                frame_names = ["run1", "run2"]
+                sprite_key = f"{frame_names[self.run_frame]}_{self.direction}"
             else:
                 sprite_key = f"idle_{self.direction}"
-            
             sprite = self.sprites.get(sprite_key, self.sprites['idle_right'])
             surface.blit(sprite, screen_rect.topleft)
         else:
             # Fallback: retângulo azul
             pygame.draw.rect(surface, BLUE, screen_rect, border_radius=8)
-            # detalhe simples
             eye = pygame.Rect(screen_rect.x + 28, screen_rect.y + 14, 8, 8)
             pygame.draw.rect(surface, WHITE, eye, border_radius=2)
 
@@ -354,11 +461,17 @@ class Coin:
 
 
 class Bullet:
-    def __init__(self, x, y, direction=1):
-        self.w = 10
-        self.h = 4
+    def __init__(self, x, y, direction=1, sprite=None):
+        self.sprite    = sprite
+        self.direction = direction
+        if sprite:
+            self.w = sprite.get_width()
+            self.h = sprite.get_height()
+        else:
+            self.w = 10
+            self.h = 4
         self.x = x
-        self.y = y
+        self.y = y - self.h // 2   # centraliza verticalmente no ponto passado
         self.speed = 10 * direction
         self.rect = pygame.Rect(int(self.x), int(self.y), self.w, self.h)
 
@@ -368,7 +481,11 @@ class Bullet:
 
     def draw(self, surface, camera):
         screen_rect = camera.apply_rect(self.rect)
-        pygame.draw.rect(surface, YELLOW, screen_rect, border_radius=2)
+        if self.sprite:
+            spr = self.sprite if self.direction >= 0 else pygame.transform.flip(self.sprite, True, False)
+            surface.blit(spr, screen_rect.topleft)
+        else:
+            pygame.draw.rect(surface, YELLOW, screen_rect, border_radius=2)
 
     def is_offscreen(self, world_w):
         return self.x > world_w or self.x + self.w < 0
@@ -544,13 +661,17 @@ def load_sound(relative_path):
         return None
 
 
+def cut_sheet(sheet, col, row, frame_w, frame_h):
+    """Extrai uma subimagem de um sprite sheet baseado em coluna e linha."""
+    return sheet.subsurface(pygame.Rect(col * frame_w, row * frame_h, frame_w, frame_h)).copy()
+
+
 def load_player_sprites(scale=1.8, feet_offset=0):
     """
     Carrega sprites do player (idle, run1, run2) para direita e cria versões espelhadas para esquerda.
     Retorna: dict com {
         'idle_right', 'idle_left',
         'run1_right', 'run1_left',
-        'run_mid_right', 'run_mid_left',
         'run2_right', 'run2_left',
         'width', 'height'
     }
@@ -565,25 +686,23 @@ def load_player_sprites(scale=1.8, feet_offset=0):
                            fallback_color=(70, 130, 220), fallback_size=size)
     run1_right = load_image(PLAYER_RUN1_RIGHT, size=size, alpha=True,
                            fallback_color=(70, 130, 220), fallback_size=size)
-    run_mid_right = load_image(PLAYER_RUN_MID_RIGHT, size=size, alpha=True,
-                           fallback_color=(70, 130, 220), fallback_size=size)
-    # Se run_mid falhar, usar run1 como fallback
-    if run_mid_right.get_size() == size and run_mid_right.get_at((0,0)).a == 0:
-        run_mid_right = run1_right
-    run2_right = load_image(PLAYER_RUN2_RIGHT, size=size, alpha=True,
-                           fallback_color=(70, 130, 220), fallback_size=size)
+    run2_path = os.path.join(os.path.dirname(__file__), "assets", PLAYER_RUN2_RIGHT)
+    if os.path.exists(run2_path):
+        run2_right = load_image(PLAYER_RUN2_RIGHT, size=size, alpha=True,
+                               fallback_color=(70, 130, 220), fallback_size=size)
+    else:
+        print(f"[img] Arquivo nao encontrado: {PLAYER_RUN2_RIGHT}. Usando run1 como fallback.")
+        run2_right = run1_right
     
     # Criar versões espelhadas para esquerda (flip horizontal)
     try:
         idle_left = pygame.transform.flip(idle_right, True, False)
         run1_left = pygame.transform.flip(run1_right, True, False)
-        run_mid_left = pygame.transform.flip(run_mid_right, True, False)
         run2_left = pygame.transform.flip(run2_right, True, False)
     except pygame.error:
         # Fallback: copiar as mesmas imagens se flip falhar
         idle_left = idle_right
         run1_left = run1_right
-        run_mid_left = run_mid_right
         run2_left = run2_right
     
     return {
@@ -591,13 +710,175 @@ def load_player_sprites(scale=1.8, feet_offset=0):
         'idle_left': idle_left,
         'run1_right': run1_right,
         'run1_left': run1_left,
-        'run_mid_right': run_mid_right,
-        'run_mid_left': run_mid_left,
         'run2_right': run2_right,
         'run2_left': run2_left,
         'width': scaled_w,
         'height': scaled_h,
     }
+
+
+def _make_fallback_surface(size):
+    """Cria uma surface de fallback azul com alpha."""
+    surf = pygame.Surface(size, pygame.SRCALPHA)
+    surf.fill((70, 130, 220, 255))
+    return surf
+
+
+def load_warpgal_sprites(scale=PLAYER_SCALE, feet_offset=PLAYER_FEET_OFFSET):
+    """
+    Carrega sprites do player a partir do warpgal sprite sheet.
+    Extrai frames usando WARPGAL_IDLE_ROW (idle) e WARPGAL_RUN_ROW (corrida).
+    Ajuste WARPGAL_IDLE_ROW / WARPGAL_RUN_ROW nas constantes para trocar linhas.
+    Retorna mesmo formato de dict que load_player_sprites().
+    """
+    scaled_w = int(PLAYER_BASE_SIZE[0] * scale)
+    scaled_h = int(PLAYER_BASE_SIZE[1] * scale)
+    size = (scaled_w, scaled_h)
+
+    sheet_path = os.path.join(os.path.dirname(__file__), "assets", WARPGAL_SHEET)
+    if os.path.exists(sheet_path):
+        try:
+            sheet = pygame.image.load(sheet_path).convert_alpha()
+            idle_raw  = cut_sheet(sheet, 0, WARPGAL_IDLE_ROW, WARPGAL_FRAME_W, WARPGAL_FRAME_H)
+            run1_raw  = cut_sheet(sheet, 0, WARPGAL_RUN_ROW,  WARPGAL_FRAME_W, WARPGAL_FRAME_H)
+            run2_raw  = cut_sheet(sheet, 4, WARPGAL_RUN_ROW,  WARPGAL_FRAME_W, WARPGAL_FRAME_H)
+            idle_right = pygame.transform.smoothscale(idle_raw, size)
+            run1_right = pygame.transform.smoothscale(run1_raw, size)
+            run2_right = pygame.transform.smoothscale(run2_raw, size)
+            print(f"[warpgal] Sprites carregados: idle(row={WARPGAL_IDLE_ROW}) run(row={WARPGAL_RUN_ROW}, cols 0+4) -> {size}")
+        except Exception as e:
+            print(f"[warpgal] Erro ao carregar sheet: {e}. Usando fallback.")
+            idle_right = run1_right = run2_right = _make_fallback_surface(size)
+    else:
+        print(f"[warpgal] Sheet nao encontrado: {WARPGAL_SHEET}. Usando fallback.")
+        idle_right = run1_right = run2_right = _make_fallback_surface(size)
+
+    idle_left  = pygame.transform.flip(idle_right, True, False)
+    run1_left  = pygame.transform.flip(run1_right, True, False)
+    run2_left  = pygame.transform.flip(run2_right, True, False)
+
+    return {
+        'idle_right': idle_right,
+        'idle_left':  idle_left,
+        'run1_right': run1_right,
+        'run1_left':  run1_left,
+        'run2_right': run2_right,
+        'run2_left':  run2_left,
+        'width':  scaled_w,
+        'height': scaled_h,
+    }
+
+
+def load_split_player_sprites(scale=PLAYER_SCALE):
+    """
+    Carrega sprites do player a partir de arquivos individuais no formato:
+    assets/images/player/Layer 1_sprite_XXX.png
+
+    Retorna dict com:
+      - Chaves legado: idle_right, run1_right, run2_right (e versões _left)
+      - Novas chaves: all_frames (idx → Surface direita), size
+    """
+    scaled_w = int(PLAYER_BASE_SIZE[0] * scale)
+    scaled_h = int(PLAYER_BASE_SIZE[1] * scale)
+    size = (scaled_w, scaled_h)
+
+    split_dir = ASSETS_DIR / "images" / "player"
+    files = sorted(split_dir.glob("Layer 1_sprite_*.png"))
+    if not files:
+        print(f"[player split] Nenhum arquivo encontrado em: {PLAYER_SPLIT_GLOB}")
+        return None
+
+    # Carrega TODOS os frames para suporte a multi-animação
+    all_frames: dict = {}
+    for sprite_file in files:
+        match = re.search(r"sprite_(\d+)\.png$", sprite_file.name)
+        if not match:
+            continue
+        idx = int(match.group(1))
+        surf = load_image(
+            f"images/player/{sprite_file.name}",
+            size=size, alpha=True,
+            fallback_color=(70, 130, 220), fallback_size=size,
+        )
+        all_frames[idx] = surf
+
+    if not all_frames:
+        print("[player split] Arquivos encontrados, mas sem índice válido.")
+        return None
+
+    available = sorted(all_frames.keys())
+
+    def resolve(target_idx):
+        if target_idx in all_frames:
+            return all_frames[target_idx]
+        best = min(available, key=lambda k: abs(k - target_idx))
+        return all_frames[best]
+
+    idle_right = resolve(PLAYER_SPLIT_IDLE_IDX)
+    run1_right = resolve(PLAYER_SPLIT_RUN1_IDX)
+    run2_right = resolve(PLAYER_SPLIT_RUN2_IDX)
+
+    idle_left = pygame.transform.flip(idle_right, True, False)
+    run1_left = pygame.transform.flip(run1_right, True, False)
+    run2_left = pygame.transform.flip(run2_right, True, False)
+
+    print(
+        f"[player split] {len(all_frames)} frames carregados "
+        f"(idle={PLAYER_SPLIT_IDLE_IDX}, run1={PLAYER_SPLIT_RUN1_IDX}, "
+        f"run2={PLAYER_SPLIT_RUN2_IDX}) -> {size}"
+    )
+
+    return {
+        # Chaves legado
+        'idle_right': idle_right, 'idle_left': idle_left,
+        'run1_right': run1_right, 'run1_left': run1_left,
+        'run2_right': run2_right, 'run2_left': run2_left,
+        'width': scaled_w, 'height': scaled_h,
+        # Novas chaves para multi-frame
+        'all_frames': all_frames,
+        'size': size,
+    }
+
+
+def load_player_sprite_set(scale=PLAYER_SCALE, feet_offset=PLAYER_FEET_OFFSET):
+    """
+    Prioridade de carregamento:
+    1) Warpgal sprite sheet (legado)
+    2) Sprites recortados individuais (Layer 1_sprite_XXX)
+    3) Fallback interno
+    """
+    warpgal_sprites = load_warpgal_sprites(scale=scale, feet_offset=feet_offset)
+    split_available = any((ASSETS_DIR / "images/player").glob("Layer 1_sprite_*.png"))
+
+    # Se o warpgal não existir, load_warpgal_sprites cai em fallback azul.
+    # Nessa situação, priorizamos os sprites recortados se existirem.
+    warpgal_path = ASSETS_DIR / WARPGAL_SHEET
+    if not warpgal_path.exists() and split_available:
+        split_sprites = load_split_player_sprites(scale=scale)
+        if split_sprites is not None:
+            return split_sprites
+
+    return warpgal_sprites
+
+
+def load_bullet_sprite():
+    """
+    Carrega sprite de bullet do shooties sheet.
+    Ajuste BULLET_FRAME_IDX (0-6) para trocar o estilo de projetil.
+    Retorna surface ou None (usa retangulo amarelo como fallback).
+    """
+    path = os.path.join(os.path.dirname(__file__), "assets", BULLET_SHEET)
+    if not os.path.exists(path):
+        print(f"[bullet] Sheet nao encontrado: {BULLET_SHEET}. Usando fallback retangulo.")
+        return None
+    try:
+        sheet = pygame.image.load(path).convert_alpha()
+        frame = cut_sheet(sheet, BULLET_FRAME_IDX, 0, BULLET_FRAME_W, BULLET_FRAME_H)
+        print(f"[bullet] Sprite carregado: frame {BULLET_FRAME_IDX} ({BULLET_FRAME_W}x{BULLET_FRAME_H})")
+        return frame
+    except Exception as e:
+        print(f"[bullet] Erro ao carregar bullet sprite: {e}")
+        return None
 
 
 def draw_menu(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui, show_controls=False):
@@ -959,8 +1240,9 @@ def main():
 
     state = MENU
 
-    # Carregar sprites do player
-    player_sprites = load_player_sprites(scale=PLAYER_SCALE, feet_offset=PLAYER_FEET_OFFSET)
+    # Carregar sprites do player (warpgal ou fallback split) e bullet
+    player_sprites = load_player_sprite_set(scale=PLAYER_SCALE, feet_offset=PLAYER_FEET_OFFSET)
+    bullet_sprite  = load_bullet_sprite()
     player = Player(sprites=player_sprites)
     coins, platforms, main_route, platform_debug, goal = build_level()
     bullets = []
@@ -1069,7 +1351,11 @@ def main():
                     if event.key in (pygame.K_SPACE, pygame.K_w, pygame.K_UP):
                         player.jump()
                     elif event.key == pygame.K_f:
-                        bullets.append(Bullet(player.x + player.w, player.y + player.h * 0.5))
+                        bdir = 1 if player.direction == "right" else -1
+                        bx = player.x + player.w if bdir == 1 else player.x
+                        bullets.append(Bullet(bx, player.y + player.h * 0.5,
+                                              direction=bdir, sprite=bullet_sprite))
+                        player.trigger_shoot()
                     elif event.key == pygame.K_ESCAPE:
                         state = MENU
 
