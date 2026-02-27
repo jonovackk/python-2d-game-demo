@@ -28,7 +28,7 @@ PLAYER_FRAME_TIME = 0.18
 PLAYER_SCALE = 1.8
 PLAYER_FEET_OFFSET = 0
 RUN_ANIM_INTERVAL = 0.12  # Intervalo entre frames de corrida
-PLAYER_BASE_SIZE = (46, 60)
+PLAYER_BASE_SIZE = (60, 60)
 
 # Sprites do player (direita - será espelhado para esquerda)
 PLAYER_IDLE_RIGHT = "images/player/player_idle_right.png"
@@ -48,22 +48,21 @@ PLAYER_SPLIT_IDLE_IDX = 1
 PLAYER_SPLIT_RUN1_IDX = 3
 PLAYER_SPLIT_RUN2_IDX = 6
 
-# Grupos de animação para sprites recortados (índices dos arquivos Layer 1_sprite_XXX)
-# Ajuste estes índices para mapear cada animação aos frames corretos
-#
-# Estrutura identificada pela análise de bounding box:
-#   frames 1-12:    ciclo de corrida/caminhada (bw oscila 15→31→15 = balanço de braços)
-#   frames 13, 28, 43: fim de cada ciclo, pose levemente diferente (cy=26.5) → agachado
-#   frames 105-116: corrida mais ampla / mais pixels (braços mais abertos)
-#   frames 118,131,144: compactos (bh=24, cy=35.5) com braço à frente → atirar agachado
-#   frames 182-193: salto (bh ≥ 39, cy ≤ 27, conteúdo no topo do sprite)
-#   frames 130-142: postura larga (bw até 41) → atirar
-ANIM_IDLE_FRAMES   = [1]                                             # frame mais estreito = parado
-ANIM_RUN_FRAMES    = [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]          # ciclo completo de corrida
-ANIM_CROUCH_FRAMES = [13, 28, 43]                                    # pose fim-de-ciclo (cy=26.5)
-ANIM_JUMP_FRAMES   = [182, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193]
-ANIM_SHOOT_FRAMES  = [118, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142]
-ANIM_FRAME_SPEED   = 0.09  # segundos por frame
+# Frames de animação do player (índices dos arquivos Layer 1_sprite_XXX.png)
+# ─────────────────────────────────────────────────────────────────────────────
+# Ajuste os índices abaixo para trocar poses sem mexer em física/código
+ANIM_RUN_FRAMES          = [121, 123, 125, 127]  # correndo mirando (RUN_AIM)
+ANIM_IDLE_WAIT_FRAME     = 117                             # frame de repouso
+ANIM_IDLE_FRAMES         = [143, 169, 195, 169, 143]       # sequência ping-pong
+ANIM_CROUCH_FRAMES       = [118]                 # agachado (S/↓ sem F)
+ANIM_CROUCH_SHOOT_FRAMES = [131]                 # agachado + F
+ANIM_JUMP_FRAMES         = [150]                   # no ar
+ANIM_SHOOT_FRAMES        = [130]                 # tiro em pé (F sem agachar)
+
+RUN_ANIM_INTERVAL   = 0.10   # segundos por frame de corrida  ← ajuste aqui
+IDLE_ANIM_INTERVAL  = 0.25   # segundos por frame de idle     ← ajuste aqui
+IDLE_WAIT_DURATION  = 3.0    # segundos de espera antes de animar ← ajuste aqui
+SHOOT_ANIM_INTERVAL = 0.06   # segundos por frame de tiro     ← ajuste aqui
 
 # Sprite sheet bullet
 BULLET_SHEET     = "images/bullets/shooties-alpha.png"
@@ -143,9 +142,12 @@ TYPE_CD_ENEMY = 1.2
 DESPAWN_BEHIND_DISTANCE = 500
 RESPITE_AFTER_HIT = 1.0
 PROGRESSION_INTERVAL = 25.0
+SCORE_KILL        = 20   # pontos por matar um inimigo     ← ajuste aqui
+SCORE_COLLECTIBLE = 50   # pontos por coletar um item      ← ajuste aqui
+
 ENEMY_CONFIG = {
     "hp": 3,
-    "score": 20,
+    "score": SCORE_KILL,
     "speed": 2.2,
     "size": (40, 54),
     "cooldown": TYPE_CD_ENEMY,
@@ -247,14 +249,15 @@ class Player:
         self.crouching = False
 
         # Animação
-        self.direction = "right"       # "right" | "left"
-        self.state = "idle"            # idle | running | crouching | airborne
-        self.run_timer = 0.0           # legado – run com 2 frames
-        self.run_frame = 0             # legado – 0=run1 1=run2
-        self.anim_frame = 0            # índice dentro da sequência atual
-        self.anim_timer = 0.0          # acumulador de tempo para avançar frame
-        self.shoot_timer = 0.0         # tempo restante da animação de tiro
-        self._prev_anim_seq_id = "idle"
+        self.direction = "right"         # "right" | "left"
+        self.state = "idle"              # idle | running | crouching | airborne
+        self.anim_frame = 0              # índice dentro da sequência atual
+        self.anim_timer = 0.0            # acumulador de tempo
+        self.is_shooting = False         # True apenas durante animação de tiro
+        self._shoot_crouching = False    # se o tiro foi acionado agachado
+        self._prev_state_key = "idle"    # detecta troca de estado para resetar frame
+        self.idle_phase = 'wait'         # 'wait' | 'anim'
+        self.idle_wait_timer = 0.0       # acumulador da espera em idle
 
         self.rect = pygame.Rect(int(self.x), int(self.y), self.w, self.h)
 
@@ -275,7 +278,7 @@ class Player:
         self.x += self.vx
         self.x = max(0, min(world_w - self.w, self.x))
 
-        # Máquina de estados de animação
+        # Máquina de estados de movimento
         if self.crouching:
             self.state = "crouching"
         elif not self.on_ground:
@@ -285,32 +288,55 @@ class Player:
         else:
             self.state = "idle"
 
-        # Contador de tiro
-        if self.shoot_timer > 0:
-            self.shoot_timer -= dt
-
-        # Avança animação multi-frame (sprites recortados)
+        # Avança animação
         if self._all_frames_r:
-            seq = self.get_anim_seq()
-            seq_id = "shoot" if self.shoot_timer > 0 else self.state
-            if seq_id != self._prev_anim_seq_id:
-                self.anim_frame = 0
-                self.anim_timer = 0.0
-            self._prev_anim_seq_id = seq_id
-            self.anim_timer += dt
-            if self.anim_timer >= ANIM_FRAME_SPEED:
-                self.anim_timer -= ANIM_FRAME_SPEED
-                self.anim_frame = (self.anim_frame + 1) % len(seq)
+            if self.is_shooting:
+                # Timer de tiro (mais rápido)
+                self.anim_timer += dt
+                if self.anim_timer >= SHOOT_ANIM_INTERVAL:
+                    self.anim_timer -= SHOOT_ANIM_INTERVAL
+                    self.anim_frame += 1
+                    seq = self.get_anim_seq()
+                    if self.anim_frame >= len(seq):
+                        # Animação de tiro terminou — volta ao estado normal
+                        self.is_shooting = False
+                        self.anim_frame = 0
+                        self.anim_timer = 0.0
+                        self._prev_state_key = self.state
+            else:
+                # Resetar frame quando estado muda
+                state_key = self.state
+                if state_key != self._prev_state_key:
+                    self.anim_frame = 0
+                    self.anim_timer = 0.0
+                    if state_key == 'idle':
+                        self.idle_phase = 'wait'
+                        self.idle_wait_timer = 0.0
+                self._prev_state_key = state_key
 
-        # Animação legado run1/run2 (sprites dict)
-        if self.state == "running":
-            self.run_timer += dt
-            if self.run_timer >= RUN_ANIM_INTERVAL:
-                self.run_timer = 0.0
-                self.run_frame = (self.run_frame + 1) % 2
-        else:
-            self.run_frame = 0
-            self.run_timer = 0.0
+                if self.state == 'idle':
+                    if self.idle_phase == 'wait':
+                        self.idle_wait_timer += dt
+                        if self.idle_wait_timer >= IDLE_WAIT_DURATION:
+                            self.idle_phase = 'anim'
+                            self.anim_frame = 0
+                            self.anim_timer = 0.0
+                    else:  # 'anim'
+                        self.anim_timer += dt
+                        if self.anim_timer >= IDLE_ANIM_INTERVAL:
+                            self.anim_timer -= IDLE_ANIM_INTERVAL
+                            self.anim_frame += 1
+                            if self.anim_frame >= len(ANIM_IDLE_FRAMES):
+                                self.idle_phase = 'wait'
+                                self.idle_wait_timer = 0.0
+                                self.anim_frame = 0
+                else:
+                    # Timer de corrida/pulo
+                    self.anim_timer += dt
+                    if self.anim_timer >= RUN_ANIM_INTERVAL:
+                        self.anim_timer -= RUN_ANIM_INTERVAL
+                        seq = self.get_anim_seq()
+                        self.anim_frame = (self.anim_frame + 1) % len(seq)
 
         # Gravidade / vertical
         prev_bottom = self.y + self.h
@@ -346,20 +372,24 @@ class Player:
 
     def get_anim_seq(self):
         """Retorna a lista de índices de frames para o estado atual."""
-        if self.shoot_timer > 0 and self.on_ground:
-            return ANIM_SHOOT_FRAMES
-        s = self.state
-        if s == "crouching":
+        if self.is_shooting:
+            return ANIM_CROUCH_SHOOT_FRAMES if self._shoot_crouching else ANIM_SHOOT_FRAMES
+        if self.state == "idle":
+            if self.idle_phase == 'wait':
+                return [ANIM_IDLE_WAIT_FRAME]
+            return ANIM_IDLE_FRAMES
+        if self.state == "crouching":
             return ANIM_CROUCH_FRAMES
-        if s == "airborne":
+        if self.state == "airborne":
             return ANIM_JUMP_FRAMES
-        if s == "running":
+        if self.state == "running":
             return ANIM_RUN_FRAMES
-        return ANIM_IDLE_FRAMES
+        return [ANIM_IDLE_WAIT_FRAME]
 
     def trigger_shoot(self):
-        """Inicia a animação de tiro."""
-        self.shoot_timer = ANIM_FRAME_SPEED * len(ANIM_SHOOT_FRAMES)
+        """Inicia a animação de tiro (chamado apenas na tecla F)."""
+        self.is_shooting = True
+        self._shoot_crouching = self.crouching
         self.anim_frame = 0
         self.anim_timer = 0.0
 
@@ -383,11 +413,10 @@ class Player:
 
         # --- Legacy sprites dict (idle/run1/run2) ---
         if self.sprites:
-            if self.state == "idle":
-                sprite_key = f"idle_{self.direction}"
-            elif self.state == "running":
-                frame_names = ["run1", "run2"]
-                sprite_key = f"{frame_names[self.run_frame]}_{self.direction}"
+            if self.state == "running":
+                # Alterna run1/run2 usando anim_frame (0=run1, 1=run2)
+                frame_name = "run1" if (self.anim_frame % 2 == 0) else "run2"
+                sprite_key = f"{frame_name}_{self.direction}"
             else:
                 sprite_key = f"idle_{self.direction}"
             sprite = self.sprites.get(sprite_key, self.sprites['idle_right'])
@@ -1006,6 +1035,11 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
     platforms = []
     main_route = []
 
+    def overlaps_any(rect, existing, h_pad=8, v_pad=20):
+        """Retorna True se 'rect' sobrépõe qualquer plataforma existente."""
+        expanded = rect.inflate(h_pad * 2, v_pad * 2)
+        return any(expanded.colliderect(p.rect) for p in existing)
+
     chunk_counts = {}
     high_streak = 0
     next_break_at = rng.randint(BREAK_ZONE_MIN, BREAK_ZONE_MAX)
@@ -1072,10 +1106,12 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
             should_spawn = False
 
         if should_spawn and x < end_limit:
-            platform = Platform(x, y, width, 16)
-            platforms.append(platform)
-            main_route.append(platform)
-            chunk_counts[chunk_index] += 1
+            candidate = Platform(x, y, width, 16)
+            if not overlaps_any(candidate.rect, platforms):
+                platform = candidate
+                platforms.append(platform)
+                main_route.append(platform)
+                chunk_counts[chunk_index] += 1
 
         if rng.random() < 0.18 and break_until_x <= x:
             branch_x = x + rng.randint(20, 80)
@@ -1084,8 +1120,10 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
             branch_chunk = int(branch_x // PLATFORM_CHUNK_SIZE)
             chunk_counts.setdefault(branch_chunk, 0)
             if branch_x < end_limit and branch_x + branch_w < world_w - 50 and chunk_counts[branch_chunk] < PLATFORM_MAX_PER_CHUNK:
-                platforms.append(Platform(branch_x, branch_y, branch_w, 16))
-                chunk_counts[branch_chunk] += 1
+                candidate_b = Platform(branch_x, branch_y, branch_w, 16)
+                if not overlaps_any(candidate_b.rect, platforms):
+                    platforms.append(candidate_b)
+                    chunk_counts[branch_chunk] += 1
 
     for index in range(1, len(main_route)):
         prev = main_route[index - 1].rect
@@ -1103,6 +1141,15 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
             cur.y = prev.top + PLATFORM_MAX_STEP_DOWN
 
         cur.y = clamp(cur.y, playable_y_min, playable_y_max)
+
+    # Remover sobreposições residuais (ex.: branch perto de plataforma ajustada)
+    clean = []
+    for p in platforms:
+        expanded = p.rect.inflate(8 * 2, 20 * 2)
+        if not any(expanded.colliderect(q.rect) for q in clean):
+            clean.append(p)
+    platforms = clean
+    main_route = [p for p in main_route if p in clean]
 
     debug_info = {
         "chunk_counts": chunk_counts,
@@ -1282,7 +1329,6 @@ def main():
     score = 0
     best_score = 0
     time_survived = 0.0
-    score_time_acc = 0.0
 
     running = True
     while running:
@@ -1310,7 +1356,6 @@ def main():
                     kills = 0
                     score = 0
                     time_survived = 0.0
-                    score_time_acc = 0.0
                     state = PLAYING
                 elif action == 'controls':
                     menu_state["show_controls"] = True
@@ -1339,7 +1384,6 @@ def main():
                                 kills = 0
                                 score = 0
                                 time_survived = 0.0
-                                score_time_acc = 0.0
                                 state = PLAYING
                             elif action == 'controls':
                                 menu_state["show_controls"] = True
@@ -1353,7 +1397,8 @@ def main():
                     elif event.key == pygame.K_f:
                         bdir = 1 if player.direction == "right" else -1
                         bx = player.x + player.w if bdir == 1 else player.x
-                        bullets.append(Bullet(bx, player.y + player.h * 0.5,
+                        by_offset = 0.75 if player.crouching else 0.5
+                        bullets.append(Bullet(bx, player.y + player.h * by_offset,
                                               direction=bdir, sprite=bullet_sprite))
                         player.trigger_shoot()
                     elif event.key == pygame.K_ESCAPE:
@@ -1382,7 +1427,6 @@ def main():
                         kills = 0
                         score = 0
                         time_survived = 0.0
-                        score_time_acc = 0.0
                         state = PLAYING
                     elif action_idx == 1:  # MENU PRINCIPAL
                         state = MENU
@@ -1406,7 +1450,6 @@ def main():
                                 kills = 0
                                 score = 0
                                 time_survived = 0.0
-                                score_time_acc = 0.0
                                 state = PLAYING
                             elif idx == 1:  # MENU PRINCIPAL
                                 state = MENU
@@ -1488,17 +1531,12 @@ def main():
             remaining_coins = []
             for c in coins:
                 if player.rect.colliderect(c.rect):
-                    score += 15
+                    score += SCORE_COLLECTIBLE
                 else:
                     remaining_coins.append(c)
             coins = remaining_coins
 
-            # Pontuação por tempo - 1 ponto por segundo real
             time_survived += dt
-            score_time_acc += dt
-            while score_time_acc >= 1.0:
-                score += 1
-                score_time_acc -= 1.0
 
             # Efeitos de hit
             updated_effects = []
@@ -1519,12 +1557,16 @@ def main():
             # Fundo fixo único
             screen.blit(bg_gameplay, (0, 0))
 
-            # Chao (mundo)
-            ground_rect = pygame.Rect(0, GROUND_Y, WORLD_W, HEIGHT - GROUND_Y)
-            pygame.draw.rect(screen, GREEN, camera.apply_rect(ground_rect))
+            # Chao (mundo) - estilo neon cyber
+            gr = camera.apply_rect(pygame.Rect(0, GROUND_Y, WORLD_W, HEIGHT - GROUND_Y))
+            pygame.draw.rect(screen, PLATFORM_SHADOW, gr)                     # fundo escuro
+            strip = pygame.Rect(gr.x, gr.y, gr.width, 8)
+            pygame.draw.rect(screen, PLATFORM_FILL, strip)                    # faixa azul-escuro
             line_start = camera.apply_pos(0, GROUND_Y)
-            line_end = camera.apply_pos(WORLD_W, GROUND_Y)
-            pygame.draw.line(screen, (50, 110, 70), line_start, line_end, 3)
+            line_end   = camera.apply_pos(WORLD_W, GROUND_Y)
+            pygame.draw.line(screen, PLATFORM_TOP,  line_start, line_end, 2)  # linha ciano neon
+            pygame.draw.line(screen, PLATFORM_GLOW, (line_start[0], line_start[1] + 3),
+                             (line_end[0], line_end[1] + 3), 1)               # sublinha roxo neon
 
             for platform in platforms:
                 platform.draw(screen, camera)
