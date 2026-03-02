@@ -146,18 +146,49 @@ PROGRESSION_INTERVAL = 25.0
 SCORE_KILL        = 20   # pontos por matar um inimigo     ← ajuste aqui
 SCORE_COLLECTIBLE = 50   # pontos por coletar um item      ← ajuste aqui
 
-ENEMY_CONFIG = {
-    "hp": 3,
-    "score": SCORE_KILL,
-    "speed": 2.2,
-    "size": (40, 54),
-    "cooldown": TYPE_CD_ENEMY,
-    "color": (120, 220, 140),
-    "frames": [
-        "images/enemies/zombie_action1.png",
-        "images/enemies/zombie_action2.png",
-    ],
-}
+# 4 tipos de inimigos: enemy1 (fraco) → enemy4 (forte)
+ENEMY_TYPES = [
+    {
+        "id": 1,
+        "hp": 1,
+        "score": 10,
+        "speed": 1.8,
+        "size": (40, 54),
+        "color": (120, 220, 140),
+        "weight": 0.40,   # probabilidade de spawn
+        "frames": [f"images/enemies/enemy1/enemy_1_sprite{i}.png" for i in range(1, 5)],
+    },
+    {
+        "id": 2,
+        "hp": 2,
+        "score": 25,
+        "speed": 2.2,
+        "size": (40, 54),
+        "color": (80, 180, 240),
+        "weight": 0.30,
+        "frames": [f"images/enemies/enemy2/enemy_2_sprite{i}.png" for i in range(1, 8)],
+    },
+    {
+        "id": 3,
+        "hp": 3,
+        "score": 50,
+        "speed": 2.6,
+        "size": (40, 54),
+        "color": (240, 160, 60),
+        "weight": 0.20,
+        "frames": [f"images/enemies/enemy3/enemy_3_sprite{i}.png" for i in range(1, 11)],
+    },
+    {
+        "id": 4,
+        "hp": 4,
+        "score": 100,
+        "speed": 3.0,
+        "size": (40, 54),
+        "color": (220, 60, 60),
+        "weight": 0.10,
+        "frames": [f"images/enemies/enemy4/enemy_4_sprite{i}.png" for i in range(1, 7)],
+    },
+]
 ENEMY_FRAME_TIME = 0.18
 HIT_FLASH_TIME = 0.18
 
@@ -430,15 +461,17 @@ class Player:
 
 
 class Enemy:
-    def __init__(self, x, frames=None):
-        self.type = ENEMY_TYPE
-        self.w, self.h = ENEMY_CONFIG["size"]
+    def __init__(self, x, config=None, frames=None):
+        cfg = config or ENEMY_TYPES[0]
+        self.type_id = cfg["id"]
+        self.w, self.h = cfg["size"]
         self.x = x
         self.y = GROUND_Y - self.h
-        self.base_speed = ENEMY_CONFIG["speed"]
+        self.base_speed = cfg["speed"]
         self.speed = self.base_speed
-        self.hp = ENEMY_CONFIG["hp"]
-        self.score_value = ENEMY_CONFIG["score"]
+        self.hp = cfg["hp"]
+        self.score_value = cfg["score"]
+        self.color = cfg["color"]
         self.direction = random.choice([-1, 1])
         self.frames = frames or []
         self.frame_index = 0
@@ -462,15 +495,16 @@ class Enemy:
                 self.frame_timer = 0.0
                 self.frame_index = (self.frame_index + 1) % len(self.frames)
 
-    def draw(self, surface, camera, fallback_color):
+    def draw(self, surface, camera, fallback_color=None):
         screen_rect = camera.apply_rect(self.rect)
+        color = fallback_color or self.color
         if self.frames:
             frame = self.frames[self.frame_index]
             if self.direction < 0:
                 frame = pygame.transform.flip(frame, True, False)
             surface.blit(frame, screen_rect.topleft)
         else:
-            pygame.draw.rect(surface, fallback_color, screen_rect, border_radius=6)
+            pygame.draw.rect(surface, color, screen_rect, border_radius=6)
 
 
 class Coin:
@@ -1197,9 +1231,21 @@ def spawn_x():
     return random.randint(220, WORLD_W - 120)
 
 
-def spawn_enemy(frames):
+def spawn_enemy(all_enemy_frames):
+    """Seleciona aleatoriamente um tipo de inimigo com base nos pesos e cria o Enemy."""
+    weights = [cfg["weight"] for cfg in ENEMY_TYPES]
+    roll = random.random() * sum(weights)
+    acc = 0.0
+    chosen_idx = 0
+    for i, w in enumerate(weights):
+        acc += w
+        if roll <= acc:
+            chosen_idx = i
+            break
+    cfg = ENEMY_TYPES[chosen_idx]
+    frames = all_enemy_frames[chosen_idx]
     x = spawn_x()
-    return Enemy(x, frames=frames)
+    return Enemy(x, config=cfg, frames=frames)
 
 
 class SpawnManager:
@@ -1244,7 +1290,7 @@ class SpawnManager:
             return x
         return None
 
-    def update(self, dt, elapsed_time, enemies, player, camera, enemy_frames):
+    def update(self, dt, elapsed_time, enemies, player, camera, all_enemy_frames):
         self.global_timer = max(0.0, self.global_timer - dt)
         self.respite_timer = max(0.0, self.respite_timer - dt)
 
@@ -1269,7 +1315,7 @@ class SpawnManager:
             if spawn_x is None:
                 spawn_attempts += 1
                 continue
-            enemy = spawn_enemy(enemy_frames)
+            enemy = spawn_enemy(all_enemy_frames)
             enemy.x = spawn_x
             enemy.rect.topleft = (int(enemy.x), int(enemy.y))
             enemies.append(enemy)
@@ -1280,7 +1326,7 @@ class SpawnManager:
         if len(enemies) < max_allowed and self.global_timer <= 0 and self.respite_timer <= 0:
             spawn_x = self._valid_spawn_x(player.x, camera.x)
             if spawn_x is not None:
-                enemy = spawn_enemy(enemy_frames)
+                enemy = spawn_enemy(all_enemy_frames)
                 enemy.x = spawn_x
                 enemy.rect.topleft = (int(enemy.x), int(enemy.y))
                 enemies.append(enemy)
@@ -1346,10 +1392,12 @@ def main():
     
     goal_image = load_image(GOAL_IMAGE_PATH, (GOAL_WIDTH, GOAL_HEIGHT))
     goal.image = goal_image
-    enemy_frames = [
-        load_image(frame_path, ENEMY_CONFIG["size"]) for frame_path in ENEMY_CONFIG["frames"]
-    ]
-    enemy_frames = [frame for frame in enemy_frames if frame is not None]
+    # Pré-carregar frames de todos os 4 tipos de inimigos
+    all_enemy_frames = []
+    for cfg in ENEMY_TYPES:
+        frames = [load_image(p, cfg["size"]) for p in cfg["frames"]]
+        frames = [f for f in frames if f is not None]
+        all_enemy_frames.append(frames)
     hit_sfx = load_sound("sound/hit.wav")
     spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
     kills = 0
@@ -1501,7 +1549,7 @@ def main():
             # Spawn manager + dificuldade
             if state == PLAYING:
                 enemies, spawn_debug, speed_multiplier = spawn_manager.update(
-                    dt, time_survived, enemies, player, camera, enemy_frames
+                    dt, time_survived, enemies, player, camera, all_enemy_frames
                 )
 
             # Atualiza inimigos
@@ -1635,7 +1683,7 @@ def main():
             player.draw(screen, camera)
 
             for enemy in enemies:
-                enemy.draw(screen, camera, ENEMY_CONFIG["color"])
+                enemy.draw(screen, camera)
             for c in coins:
                 c.draw(screen, camera)
             for b in bullets:
