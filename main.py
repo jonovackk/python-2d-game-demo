@@ -30,6 +30,18 @@ PLAYER_FEET_OFFSET = 0
 RUN_ANIM_INTERVAL = 0.12  # Intervalo entre frames de corrida
 PLAYER_BASE_SIZE = (52, 52)
 
+# Base de referência para escala dos inimigos (1.0 = mesmo tamanho do player)
+_ENEMY_REF_H = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)   # 93 px
+ENEMY_SCALE_SMALL  = 0.90    # enemy1  ← ajuste aqui
+ENEMY_SCALE_MEDIUM = 1.05    # enemy2  ← ajuste aqui
+TARGET_LARGE_HEIGHT_MULT  = 1.05    # enemy3 (vermelho)  ← ajuste aqui
+ENEMY_SCALE_LARGE  = TARGET_LARGE_HEIGHT_MULT
+ENEMY_SCALE_XLARGE = 1.40    # enemy4  ← ajuste aqui
+
+def _etarget_h(scale):
+    """Altura-alvo em pixels para um inimigo com este multiplicador."""
+    return int(_ENEMY_REF_H * scale)
+
 # Sprites do player (direita - será espelhado para esquerda)
 PLAYER_IDLE_RIGHT = "images/player/player_idle_right.png"
 PLAYER_RUN1_RIGHT = "images/player/player_run1_right.png"
@@ -92,8 +104,16 @@ PLATFORM_CHUNK_SIZE = 500
 PLATFORM_MAX_PER_CHUNK = 3
 
 DEBUG_PLATFORMS = False  # Desativa overlays de debug: índices, linhas conectadas, info de chunk
-DEBUG_HITBOX = False     # Mostra contornos das hitboxes em amarelo
+DEBUG_HITBOX = False     # True → mostra hitbox amarela (inimigo) e verde (player)
+DEBUG_ENEMY_BOX = False  # True → mostra rect vermelho do inimigo (tamho do sprite)
 DEBUG_UI = False         # Desativa informações técnicas na HUD (Active/CD, Jump H/D)
+DEBUG_ENEMY_SIZE = False # True → mostra (w,h) e escala acima de cada inimigo
+
+# Fatores de hitbox — ajuste para colisão mais justa ou mais permissiva
+PLAYER_HB_W = 0.55   # ← fração da largura do sprite do player
+PLAYER_HB_H = 0.72   # ← fração da altura do sprite do player
+ENEMY_HB_W  = 0.60   # ← fração da largura do sprite do inimigo
+ENEMY_HB_H  = 0.72   # ← fração da altura do sprite do inimigo
 
 GOAL_WIDTH = 60
 GOAL_HEIGHT = 90
@@ -131,18 +151,20 @@ CAMERA_DEAD_LEFT_RATIO = 0.28
 CAMERA_DEAD_RIGHT_RATIO = 0.52
 
 ENEMY_TYPE = "zombie"
-MIN_ACTIVE_ENEMIES = 3
-MAX_ACTIVE_ENEMIES = 6
-DIST_MIN_FROM_PLAYER_X = 350
-SPAWN_CLUSTER_MIN_DIST = 120
-SPAWN_RIGHT_OFFSET_MIN = 80
-SPAWN_RIGHT_OFFSET_MAX = 360
-GLOBAL_SPAWN_CD_START = 1.2
-GLOBAL_SPAWN_CD_MIN = 0.55
+MIN_ACTIVE_ENEMIES    = 2     # ← mínimo de inimigos na tela
+MAX_ACTIVE_ENEMIES    = 5     # ← máximo de inimigos ativos (ENEMY_MAX_ACTIVE)
+MIN_SPAWN_DIST_X      = 450   # ← distância mínima do player para spawnar
+MIN_ENEMY_SEPARATION_X = 200  # ← distância mínima entre inimigos (ENEMY_MIN_SPAWN_DIST_X)
+SPAWN_RIGHT_OFFSET_MIN = 100  # ← offset mínimo além da borda direita da câmera
+SPAWN_RIGHT_OFFSET_MAX = 280  # ← offset máximo além da borda direita da câmera
+GLOBAL_SPAWN_CD_START = 2.2   # ← cooldown inicial entre spawns (ENEMY_SPAWN_COOLDOWN)
+GLOBAL_SPAWN_CD_MIN   = 1.1   # ← cooldown mínimo (com progressão de dificuldade)
 TYPE_CD_ENEMY = 1.2
-DESPAWN_BEHIND_DISTANCE = 500
-RESPITE_AFTER_HIT = 1.0
-PROGRESSION_INTERVAL = 25.0
+DESPAWN_LEFT_MARGIN = 80      # ← remove inimigo quando rect.right < camera.x - N
+RESPITE_AFTER_HIT = 1.5
+PROGRESSION_INTERVAL = 30.0
+DEBUG_ENEMIES      = False    # ← True para ver seta de direção e vx acima do inimigo
+DEBUG_ENEMY_SPAWN  = False    # ← True para printar eventos de spawn no terminal
 SCORE_KILL        = 20   # pontos por matar um inimigo     ← ajuste aqui
 SCORE_COLLECTIBLE = 50   # pontos por coletar um item      ← ajuste aqui
 
@@ -153,9 +175,12 @@ ENEMY_TYPES = [
         "hp": 1,
         "score": 10,
         "speed": 1.8,
-        "size": (72, 80),
+        "size": (_etarget_h(ENEMY_SCALE_SMALL), _etarget_h(ENEMY_SCALE_SMALL)),  # referência
+        "scale": ENEMY_SCALE_SMALL,
         "color": (120, 220, 140),
         "weight": 0.40,   # probabilidade de spawn
+        "faces_right": False,  # sprites olham para a ESQUERDA por padrão
+        "y_offset": 0,
         "frames": [f"images/enemies/enemy1/enemy_1_sprite{i}.png" for i in range(1, 5)],
     },
     {
@@ -163,9 +188,12 @@ ENEMY_TYPES = [
         "hp": 2,
         "score": 25,
         "speed": 2.2,
-        "size": (80, 90),
+        "size": (_etarget_h(ENEMY_SCALE_MEDIUM), _etarget_h(ENEMY_SCALE_MEDIUM)),  # referência
+        "scale": ENEMY_SCALE_MEDIUM,
         "color": (80, 180, 240),
-        "weight": 0.0,    # DESATIVADO
+        "weight": 0.30,
+        "faces_right": True,   # sprites olham para a DIREITA por padrão
+        "y_offset": 23,        # px transparente embaixo escalado
         "frames": [f"images/enemies/enemy2/enemy_2_sprite{i}.png" for i in range(1, 8)],
     },
     {
@@ -173,9 +201,12 @@ ENEMY_TYPES = [
         "hp": 3,
         "score": 50,
         "speed": 2.6,
-        "size": (88, 100),
+        "size": (_etarget_h(ENEMY_SCALE_LARGE), _etarget_h(ENEMY_SCALE_LARGE)),  # referência
+        "scale": ENEMY_SCALE_LARGE,
         "color": (240, 160, 60),
-        "weight": 0.0,    # DESATIVADO
+        "weight": 0.20,
+        "faces_right": True,   # sprites olham para a DIREITA por padrão → flip p/ esquerda
+        "y_offset": 0,
         "frames": [f"images/enemies/enemy3/enemy_3_sprite{i}.png" for i in range(1, 11)],
     },
     {
@@ -183,9 +214,12 @@ ENEMY_TYPES = [
         "hp": 4,
         "score": 100,
         "speed": 3.0,
-        "size": (96, 110),
+        "size": (_etarget_h(ENEMY_SCALE_XLARGE), _etarget_h(ENEMY_SCALE_XLARGE)),  # referência
+        "scale": ENEMY_SCALE_XLARGE,
         "color": (220, 60, 60),
         "weight": 0.0,    # DESATIVADO
+        "faces_right": False,
+        "y_offset": 0,
         "frames": [f"images/enemies/enemy4/enemy_4_sprite{i}.png" for i in range(1, 7)],
     },
 ]
@@ -292,6 +326,14 @@ class Player:
         self.idle_wait_timer = 0.0       # acumulador da espera em idle
 
         self.rect = pygame.Rect(int(self.x), int(self.y), self.w, self.h)
+        self.hitbox = self._make_hitbox()
+
+    def _make_hitbox(self):
+        hb_w = int(self.rect.w * PLAYER_HB_W)
+        hb_h = int(self.rect.h * PLAYER_HB_H)
+        hb_x = self.rect.centerx - hb_w // 2
+        hb_y = self.rect.bottom - hb_h
+        return pygame.Rect(hb_x, hb_y, hb_w, hb_h)
 
     def update(self, keys, world_w, platforms, dt):
         # Agachar: bloqueia movimento horizontal e pulo
@@ -375,6 +417,7 @@ class Player:
         self.vy += GRAVITY
         self.y += self.vy
         self.rect.topleft = (int(self.x), int(self.y))
+        self.hitbox = self._make_hitbox()
 
         # Colisão com chão
         if self.y + self.h >= GROUND_Y:
@@ -396,6 +439,7 @@ class Player:
                     break
 
         self.rect.topleft = (int(self.x), int(self.y))
+        self.hitbox = self._make_hitbox()
 
     def jump(self):
         if self.on_ground and not self.crouching:
@@ -459,35 +503,51 @@ class Player:
             eye = pygame.Rect(screen_rect.x + 28, screen_rect.y + 14, 8, 8)
             pygame.draw.rect(surface, WHITE, eye, border_radius=2)
 
+        if DEBUG_HITBOX:
+            hb_screen = camera.apply_rect(self.hitbox)
+            pygame.draw.rect(surface, (0, 255, 80), hb_screen, 2)   # verde = player hitbox
+
 
 class Enemy:
     def __init__(self, x, config=None, frames=None):
         cfg = config or ENEMY_TYPES[0]
         self.type_id = cfg["id"]
-        self.w, self.h = cfg["size"]
+        self.scale = cfg.get("scale", 1.0)
+        self.frames = frames or []
+        # Dimensões reais a partir do primeiro frame carregado
+        if self.frames:
+            self.w, self.h = self.frames[0].get_size()
+        else:
+            self.w, self.h = cfg["size"]
         self.x = x
-        self.y = GROUND_Y - self.h
+        self.y = GROUND_Y - self.h + cfg.get("y_offset", 0)
         self.base_speed = cfg["speed"]
         self.speed = self.base_speed
         self.hp = cfg["hp"]
         self.score_value = cfg["score"]
         self.color = cfg["color"]
-        self.direction = random.choice([-1, 1])
+        self.direction = -1          # sempre move para a esquerda (em direção ao player)
+        self.faces_right = cfg.get("faces_right", False)
+        self.slow_factor = 1.0       # 0..1, reduzido pelo passe de separação
         self.frames = frames or []
         self.frame_index = 0
         self.frame_timer = 0.0
         self.rect = pygame.Rect(int(self.x), int(self.y), self.w, self.h)
+        self.hitbox = self._make_hitbox()
+
+    def _make_hitbox(self):
+        hb_w = int(self.rect.w * ENEMY_HB_W)
+        hb_h = int(self.rect.h * ENEMY_HB_H)
+        hb_x = self.rect.centerx - hb_w // 2
+        hb_y = self.rect.bottom - hb_h   # ancorado nos pés
+        return pygame.Rect(hb_x, hb_y, hb_w, hb_h)
 
     def update(self, world_w, speed_multiplier=1.0, dt=0.0):
-        self.speed = self.base_speed * speed_multiplier
-        self.x += self.speed * self.direction
-        if self.x <= 0:
-            self.x = 0
-            self.direction = 1
-        if self.x + self.w >= world_w:
-            self.x = world_w - self.w
-            self.direction = -1
+        effective_speed = self.base_speed * speed_multiplier * self.slow_factor
+        self.slow_factor = 1.0       # reseta; separação vai reduzir antes do próximo frame
+        self.x -= effective_speed    # move sempre para esquerda
         self.rect.topleft = (int(self.x), int(self.y))
+        self.hitbox = self._make_hitbox()
 
         if len(self.frames) > 1:
             self.frame_timer += dt
@@ -495,16 +555,39 @@ class Enemy:
                 self.frame_timer = 0.0
                 self.frame_index = (self.frame_index + 1) % len(self.frames)
 
-    def draw(self, surface, camera, fallback_color=None):
+    def draw(self, surface, camera, fallback_color=None, font=None):
         screen_rect = camera.apply_rect(self.rect)
         color = fallback_color or self.color
         if self.frames:
             frame = self.frames[self.frame_index]
-            if self.direction < 0:
+            # Direção sempre esquerda (-1): flip só se sprite aponta para direita
+            if self.faces_right:
                 frame = pygame.transform.flip(frame, True, False)
             surface.blit(frame, screen_rect.topleft)
         else:
             pygame.draw.rect(surface, color, screen_rect, border_radius=6)
+
+        if DEBUG_HITBOX:
+            hb_screen = camera.apply_rect(self.hitbox)
+            pygame.draw.rect(surface, (255, 220, 0), hb_screen, 2)   # amarelo = enemy hitbox
+
+        if DEBUG_ENEMY_BOX:
+            pygame.draw.rect(surface, (255, 40, 40), screen_rect, 2)  # vermelho = sprite rect
+
+        if DEBUG_ENEMY_SIZE and font:
+            size_text = font.render(f"{self.w}×{self.h} s={self.scale:.2f}", True, (255, 255, 255))
+            surface.blit(size_text, (screen_rect.left, screen_rect.top - 18))
+
+        if DEBUG_ENEMIES and font:
+            # Seta indicando direção
+            cx = screen_rect.centerx
+            top = screen_rect.top - 18
+            pygame.draw.line(surface, (255, 80, 80), (cx, top), (cx - 14, top), 2)
+            pygame.draw.polygon(surface, (255, 80, 80),
+                                [(cx - 14, top - 5), (cx - 14, top + 5), (cx - 22, top)])
+            # Texto vx
+            vx_text = font.render(f"vx={-self.base_speed*self.slow_factor:.1f}", True, (255, 255, 80))
+            surface.blit(vx_text, (screen_rect.left, screen_rect.top - 32))
 
 
 class Coin:
@@ -1272,20 +1355,28 @@ class SpawnManager:
         increments = int(elapsed_time // PROGRESSION_INTERVAL)
         return min(MAX_ACTIVE_ENEMIES, MIN_ACTIVE_ENEMIES + increments)
 
-    def _valid_spawn_x(self, player_x, camera_x):
+    def _valid_spawn_x(self, player_x, camera_x, enemies=None):
+        # Spawn SEMPRE à direita da câmera
         min_x = camera_x + self.screen_w + SPAWN_RIGHT_OFFSET_MIN
         max_x = camera_x + self.screen_w + SPAWN_RIGHT_OFFSET_MAX
         max_x = min(max_x, self.world_w - 60)
         if min_x >= max_x:
             return None
 
-        for _ in range(4):
+        for _ in range(8):
             x = random.randint(int(min_x), int(max_x))
-            if abs(x - player_x) < DIST_MIN_FROM_PLAYER_X:
+            if abs(x - player_x) < MIN_SPAWN_DIST_X:
                 continue
             if x >= self.goal_x - GOAL_SAFE_ZONE:
                 continue
-            if self.last_spawn_x is not None and abs(x - self.last_spawn_x) < SPAWN_CLUSTER_MIN_DIST:
+            # Verifica separação mínima contra TODOS os inimigos existentes
+            too_close = False
+            if enemies:
+                for e in enemies:
+                    if abs(x - e.x) < MIN_ENEMY_SEPARATION_X:
+                        too_close = True
+                        break
+            if too_close:
                 continue
             return x
         return None
@@ -1294,10 +1385,10 @@ class SpawnManager:
         self.global_timer = max(0.0, self.global_timer - dt)
         self.respite_timer = max(0.0, self.respite_timer - dt)
 
+        # Despawn: inimigo saiu da tela pela esquerda
         enemies = [
-            enemy
-            for enemy in enemies
-            if enemy.x + enemy.w >= camera.x - DESPAWN_BEHIND_DISTANCE
+            e for e in enemies
+            if e.rect.right >= camera.x - DESPAWN_LEFT_MARGIN
         ]
 
         target_limit = self._target_limit(elapsed_time)
@@ -1306,32 +1397,20 @@ class SpawnManager:
 
         max_allowed = min(MAX_ACTIVE_ENEMIES, target_limit)
 
-        spawn_attempts = 0
-        max_attempts = 6
-        while len(enemies) < MIN_ACTIVE_ENEMIES and spawn_attempts < max_attempts:
-            if self.global_timer > 0 or self.respite_timer > 0:
-                break
-            spawn_x = self._valid_spawn_x(player.x, camera.x)
-            if spawn_x is None:
-                spawn_attempts += 1
-                continue
-            enemy = spawn_enemy(all_enemy_frames)
-            enemy.x = spawn_x
-            enemy.rect.topleft = (int(enemy.x), int(enemy.y))
-            enemies.append(enemy)
-            self.last_spawn_x = spawn_x
-            self.global_timer = global_cd
-            spawn_attempts += 1
-
+        # Spawn no máximo UM inimigo por frame
         if len(enemies) < max_allowed and self.global_timer <= 0 and self.respite_timer <= 0:
-            spawn_x = self._valid_spawn_x(player.x, camera.x)
+            spawn_x = self._valid_spawn_x(player.x, camera.x, enemies)
             if spawn_x is not None:
                 enemy = spawn_enemy(all_enemy_frames)
                 enemy.x = spawn_x
                 enemy.rect.topleft = (int(enemy.x), int(enemy.y))
+                enemy.hitbox = enemy._make_hitbox()
                 enemies.append(enemy)
                 self.last_spawn_x = spawn_x
                 self.global_timer = global_cd
+                if DEBUG_ENEMY_SPAWN:
+                    print(f"[SPAWN] tipo={enemy.type_id} x={spawn_x:.0f} "
+                          f"cd={global_cd:.2f}s ativos={len(enemies)}")
 
         debug = {
             "global_cd": global_cd,
@@ -1393,11 +1472,27 @@ def main():
     goal_image = load_image(GOAL_IMAGE_PATH, (GOAL_WIDTH, GOAL_HEIGHT))
     goal.image = goal_image
     # Pré-carregar frames de todos os 4 tipos de inimigos
+    # Escalonamento por altura-alvo preservando aspect ratio do sprite original
     all_enemy_frames = []
     for cfg in ENEMY_TYPES:
-        frames = [load_image(p, cfg["size"]) for p in cfg["frames"]]
-        frames = [f for f in frames if f is not None]
-        all_enemy_frames.append(frames)
+        target_h = _etarget_h(cfg["scale"])
+        type_frames = []
+        for p in cfg["frames"]:
+            full_path = os.path.join(os.path.dirname(__file__), "assets", p)
+            if os.path.exists(full_path):
+                try:
+                    img = pygame.image.load(full_path).convert_alpha()
+                    orig_w, orig_h = img.get_size()
+                    # Escala pela altura-alvo, preserva aspect ratio
+                    scale_factor = target_h / orig_h
+                    new_w = max(1, int(orig_w * scale_factor))
+                    img = pygame.transform.smoothscale(img, (new_w, target_h))
+                    type_frames.append(img)
+                except pygame.error:
+                    type_frames.append(load_image(p, cfg["size"]))
+            else:
+                type_frames.append(load_image(p, cfg["size"]))
+        all_enemy_frames.append(type_frames)
     hit_sfx = load_sound("sound/hit.wav")
     spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
     kills = 0
@@ -1552,6 +1647,18 @@ def main():
                     dt, time_survived, enemies, player, camera, all_enemy_frames
                 )
 
+            # Passe de separação: aplica slow_factor no inimigo traseiro
+            # antes do update, para que ele afrouxa quando o da frente está próximo
+            sorted_enemies = sorted(enemies, key=lambda e: e.x)  # menor x = mais à frente
+            for i in range(len(sorted_enemies) - 1):
+                ea = sorted_enemies[i]   # da frente (menor x)
+                eb = sorted_enemies[i + 1]  # atrás (maior x)
+                gap = eb.x - (ea.x + ea.w)
+                if gap < MIN_ENEMY_SEPARATION_X:
+                    # Quanto mais perto, mais devagar o traseiro anda
+                    ratio = max(0.0, gap / MIN_ENEMY_SEPARATION_X)
+                    eb.slow_factor = min(eb.slow_factor, ratio)
+
             # Atualiza inimigos
             for enemy in enemies:
                 enemy.update(WORLD_W, speed_multiplier=speed_multiplier, dt=dt)
@@ -1572,7 +1679,7 @@ def main():
             for b in bullets:
                 hit = False
                 for enemy in enemies:
-                    if b.rect.colliderect(enemy.rect):
+                    if b.rect.colliderect(enemy.hitbox):
                         enemy.hp -= 1
                         effects.append({"x": enemy.rect.centerx, "y": enemy.rect.centery, "ttl": HIT_FLASH_TIME})
                         if hit_sfx:
@@ -1592,9 +1699,9 @@ def main():
                         kills += 1
 
 
-            # Colisão com inimigos => Game Over
+            # Colisão com inimigos => Game Over (usa hitboxes menores = mais justo)
             for enemy in enemies:
-                if player.rect.colliderect(enemy.rect):
+                if player.hitbox.colliderect(enemy.hitbox):
                     spawn_manager.notify_player_hit()
                     best_score = max(best_score, score)
                     state = GAME_OVER
@@ -1683,7 +1790,7 @@ def main():
             player.draw(screen, camera)
 
             for enemy in enemies:
-                enemy.draw(screen, camera)
+                enemy.draw(screen, camera, font=font_small)
             for c in coins:
                 c.draw(screen, camera)
             for b in bullets:
