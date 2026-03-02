@@ -28,7 +28,7 @@ PLAYER_FRAME_TIME = 0.18
 PLAYER_SCALE = 1.8
 PLAYER_FEET_OFFSET = 0
 RUN_ANIM_INTERVAL = 0.12  # Intervalo entre frames de corrida
-PLAYER_BASE_SIZE = (60, 60)
+PLAYER_BASE_SIZE = (52, 52)
 
 # Sprites do player (direita - será espelhado para esquerda)
 PLAYER_IDLE_RIGHT = "images/player/player_idle_right.png"
@@ -108,6 +108,7 @@ BG_PATH = "images/background/bg_gameplay.png"
 MENU = "menu"
 PLAYING = "playing"
 GAME_OVER = "game_over"
+CONTROLS = "controls"
 LEVEL_COMPLETE = "level_complete"
 
 # Cores
@@ -647,8 +648,13 @@ class Button:
         # Desenhar borda neon
         pygame.draw.rect(surface, border_color, self.rect, width=border_width, border_radius=8)
         
-        # Desenhar texto
+        # Desenhar texto (escala proporcional se ultrapassar o botão)
         text_img = font.render(self.label, True, text_color)
+        max_w = self.rect.width - 16
+        if text_img.get_width() > max_w:
+            scale = max_w / text_img.get_width()
+            new_h = max(1, int(text_img.get_height() * scale))
+            text_img = pygame.transform.smoothscale(text_img, (max_w, new_h))
         text_rect = text_img.get_rect(center=self.rect.center)
         surface.blit(text_img, text_rect)
 
@@ -910,36 +916,60 @@ def load_bullet_sprite():
         return None
 
 
-def draw_menu(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui, show_controls=False):
+def draw_menu(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui):
     """
-    Renderiza o menu com background, overlay, título, botões e opcionalmente controles.
+    Renderiza o menu com background, overlay, título e botões.
     """
-    # Desenhar background
     screen.blit(menu_bg, (0, 0))
-    
-    # Aplicar overlay escuro semitransparente para legibilidade
     overlay = pygame.Surface((WIDTH, HEIGHT))
     overlay.set_alpha(100)
     overlay.fill(BLACK)
     screen.blit(overlay, (0, 0))
-    
-    # Título
     draw_text(screen, "PYTHON 2D GAME DEMO", font_title, WHITE, WIDTH // 2, 80, center=True)
-    
-    # Desenhar botões
     for idx, button in enumerate(buttons):
         is_selected = (idx == selected_button_idx)
         draw_button(screen, button, font_ui, selected=is_selected)
-    
-    # Se mostrando controles, exibir no lugar dos botões
-    if show_controls:
-        draw_text(screen, "CONTROLES", font_ui, YELLOW, WIDTH // 2, 200, center=True)
-        draw_text(screen, "A/D ou <-/-> : Mover | SPACE/W/^ : Pular", 
-                 pygame.font.SysFont("arial", 20), WHITE, WIDTH // 2, 260, center=True)
-        draw_text(screen, "F : Atirar | ESC : Menu", 
-                 pygame.font.SysFont("arial", 20), WHITE, WIDTH // 2, 290, center=True)
-        draw_text(screen, "[Pressione ESC para voltar]", 
-                 pygame.font.SysFont("arial", 18), GRAY, WIDTH // 2, 400, center=True)
+
+
+def draw_controls_screen(screen, menu_bg, back_button, selected, font_title, font_ui):
+    """Tela dedicada de controles com botão de voltar."""
+    screen.blit(menu_bg, (0, 0))
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.set_alpha(130)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+
+    draw_text(screen, "CONTROLES", font_title, PLATFORM_TOP, WIDTH // 2, 60, center=True)
+
+    font_label = pygame.font.SysFont("arial", 20, bold=True)
+    font_val   = pygame.font.SysFont("arial", 20)
+    cx = WIDTH // 2
+    entries = [
+        ("Mover",        "A / D   ou   ← / →"),
+        ("Pular",        "W / SPACE   ou   ↑"),
+        ("Agachar",      "S   ou   ↓"),
+        ("Atirar",       "F"),
+        ("Agachar+Atirar", "S + F"),
+        ("Menu / Pausar", "ESC"),
+    ]
+    start_y = 150
+    line_h  = 46
+    # Painel de fundo para a tabela
+    panel = pygame.Surface((520, len(entries) * line_h + 20), pygame.SRCALPHA)
+    panel.fill((10, 18, 42, 180))
+    screen.blit(panel, (cx - 260, start_y - 14))
+    pygame.draw.rect(screen, PLATFORM_TOP, (cx - 260, start_y - 14, 520, len(entries) * line_h + 20), 1)
+
+    for i, (label, value) in enumerate(entries):
+        y = start_y + i * line_h
+        # label à direita do centro, value à esquerda
+        lbl_surf = font_label.render(label, True, YELLOW)
+        screen.blit(lbl_surf, (cx - 20 - lbl_surf.get_width(), y))
+        draw_text(screen, value, font_val, PLATFORM_TOP, cx + 20, y)
+        if i < len(entries) - 1:
+            pygame.draw.line(screen, PLATFORM_SHADOW, (cx - 255, y + line_h - 6), (cx + 255, y + line_h - 6), 1)
+
+    draw_button(screen, back_button, font_ui, selected=selected)
 
 
 def draw_generic_menu_screen(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui,
@@ -1000,30 +1030,25 @@ def handle_generic_screen_input(event, screen_state, num_buttons=3):
 def handle_menu_input(event, menu_state):
     """
     Processa input do menu (teclado e mouse).
-    Retorna: (new_selected_idx, action, show_controls)
+    Retorna: (new_selected_idx, action)
     Ações: None, 'play', 'controls', 'quit'
     """
     selected_idx = menu_state.get("selected", 0)
-    show_controls = menu_state.get("show_controls", False)
-    
+
     if event.type == pygame.KEYDOWN:
-        if show_controls:
-            if event.key == pygame.K_ESCAPE:
-                return selected_idx, None, False
-        else:
-            if event.key == pygame.K_UP:
-                selected_idx = (selected_idx - 1) % 3
-                return selected_idx, None, show_controls
-            elif event.key == pygame.K_DOWN:
-                selected_idx = (selected_idx + 1) % 3
-                return selected_idx, None, show_controls
-            elif event.key == pygame.K_RETURN:
-                actions = ['play', 'controls', 'quit']
-                return selected_idx, actions[selected_idx], False
-            elif event.key == pygame.K_ESCAPE:
-                return selected_idx, 'quit', False
-    
-    return selected_idx, None, show_controls
+        if event.key == pygame.K_UP:
+            selected_idx = (selected_idx - 1) % 3
+            return selected_idx, None
+        elif event.key == pygame.K_DOWN:
+            selected_idx = (selected_idx + 1) % 3
+            return selected_idx, None
+        elif event.key == pygame.K_RETURN:
+            actions = ['play', 'controls', 'quit']
+            return selected_idx, actions[selected_idx]
+        elif event.key == pygame.K_ESCAPE:
+            return selected_idx, 'quit'
+
+    return selected_idx, None
 
 
 def clamp(value, min_value, max_value):
@@ -1307,7 +1332,9 @@ def main():
         Button("CONTROLES", WIDTH // 2 - 100, 290, 200, 50),
         Button("SAIR", WIDTH // 2 - 100, 360, 200, 50),
     ]
-    menu_state = {"selected": 0, "show_controls": False}
+    menu_state = {"selected": 0}
+    controls_back_button = Button("VOLTAR AO MENU", WIDTH // 2 - 130, 480, 260, 50)
+    controls_state = {"selected": 0}  # 0 = botão voltar selecionado
     
     # Botões para GAME_OVER (mesma posição vertical para consistência)
     game_over_buttons = [
@@ -1340,55 +1367,53 @@ def main():
                 running = False
 
             if state == MENU:
-                selected_idx, action, show_controls = handle_menu_input(event, menu_state)
+                selected_idx, action = handle_menu_input(event, menu_state)
                 menu_state["selected"] = selected_idx
-                menu_state["show_controls"] = show_controls
-                
-                if action == 'play':
-                    # Iniciar jogo
+
+                def _start_game():
+                    nonlocal player, coins, platforms, main_route, platform_debug, goal
+                    nonlocal bullets, enemies, effects, spawn_manager, kills, score, time_survived, state
                     player = Player(sprites=player_sprites)
                     coins, platforms, main_route, platform_debug, goal = build_level()
-                    bullets = []
-                    enemies = []
-                    effects = []
+                    bullets = []; enemies = []; effects = []
                     spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
                     goal.image = goal_image
-                    kills = 0
-                    score = 0
-                    time_survived = 0.0
+                    kills = 0; score = 0; time_survived = 0.0
                     state = PLAYING
+
+                if action == 'play':
+                    _start_game()
                 elif action == 'controls':
-                    menu_state["show_controls"] = True
+                    state = CONTROLS
                 elif action == 'quit':
                     running = False
-                
+
                 # Atualizar hover do mouse
                 mouse_pos = pygame.mouse.get_pos()
                 for button in buttons:
                     button.update_hover(mouse_pos)
-                
-                # Verificar clique em botões
+
+                # Clique em botões do menu
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     for idx, button in enumerate(buttons):
                         if button.rect.collidepoint(mouse_pos):
-                            actions = ['play', 'controls', 'quit']
-                            action = actions[idx]
-                            if action == 'play':
-                                player = Player(sprites=player_sprites)
-                                coins, platforms, main_route, platform_debug, goal = build_level()
-                                bullets = []
-                                enemies = []
-                                effects = []
-                                spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
-                                goal.image = goal_image
-                                kills = 0
-                                score = 0
-                                time_survived = 0.0
-                                state = PLAYING
-                            elif action == 'controls':
-                                menu_state["show_controls"] = True
-                            elif action == 'quit':
-                                running = False
+                            actions_map = ['play', 'controls', 'quit']
+                            act = actions_map[idx]
+                            if act == 'play':       _start_game()
+                            elif act == 'controls': state = CONTROLS
+                            elif act == 'quit':     running = False
+
+            elif state == CONTROLS:
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_RETURN):
+                        state = MENU
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mouse_pos = pygame.mouse.get_pos()
+                    controls_back_button.update_hover(mouse_pos)
+                    if controls_back_button.rect.collidepoint(mouse_pos):
+                        state = MENU
+                if event.type == pygame.MOUSEMOTION:
+                    controls_back_button.update_hover(pygame.mouse.get_pos())
 
             elif state == PLAYING:
                 if event.type == pygame.KEYDOWN:
@@ -1550,8 +1575,11 @@ def main():
         screen.fill(BG_COLOR)
 
         if state == MENU:
-            draw_menu(screen, menu_bg, buttons, menu_state["selected"], font_title, font_ui, 
-                     show_controls=menu_state["show_controls"])
+            draw_menu(screen, menu_bg, buttons, menu_state["selected"], font_title, font_ui)
+
+        elif state == CONTROLS:
+            draw_controls_screen(screen, menu_bg, controls_back_button,
+                                 selected=True, font_title=font_title, font_ui=font_ui)
 
         elif state == PLAYING:
             # Fundo fixo único
