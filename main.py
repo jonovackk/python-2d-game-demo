@@ -153,7 +153,7 @@ ENEMY_TYPES = [
         "hp": 1,
         "score": 10,
         "speed": 1.8,
-        "size": (40, 54),
+        "size": (72, 80),
         "color": (120, 220, 140),
         "weight": 0.40,   # probabilidade de spawn
         "frames": [f"images/enemies/enemy1/enemy_1_sprite{i}.png" for i in range(1, 5)],
@@ -163,9 +163,9 @@ ENEMY_TYPES = [
         "hp": 2,
         "score": 25,
         "speed": 2.2,
-        "size": (40, 54),
+        "size": (80, 90),
         "color": (80, 180, 240),
-        "weight": 0.30,
+        "weight": 0.0,    # DESATIVADO
         "frames": [f"images/enemies/enemy2/enemy_2_sprite{i}.png" for i in range(1, 8)],
     },
     {
@@ -173,9 +173,9 @@ ENEMY_TYPES = [
         "hp": 3,
         "score": 50,
         "speed": 2.6,
-        "size": (40, 54),
+        "size": (88, 100),
         "color": (240, 160, 60),
-        "weight": 0.20,
+        "weight": 0.0,    # DESATIVADO
         "frames": [f"images/enemies/enemy3/enemy_3_sprite{i}.png" for i in range(1, 11)],
     },
     {
@@ -183,9 +183,9 @@ ENEMY_TYPES = [
         "hp": 4,
         "score": 100,
         "speed": 3.0,
-        "size": (40, 54),
+        "size": (96, 110),
         "color": (220, 60, 60),
-        "weight": 0.10,
+        "weight": 0.0,    # DESATIVADO
         "frames": [f"images/enemies/enemy4/enemy_4_sprite{i}.png" for i in range(1, 7)],
     },
 ]
