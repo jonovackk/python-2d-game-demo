@@ -34,9 +34,9 @@ PLAYER_BASE_SIZE = (52, 52)
 _ENEMY_REF_H = int(PLAYER_BASE_SIZE[1] * PLAYER_SCALE)   # 93 px
 ENEMY_SCALE_SMALL  = 0.90    # enemy1  ← ajuste aqui
 ENEMY_SCALE_MEDIUM = 1.05    # enemy2  ← ajuste aqui
-TARGET_LARGE_HEIGHT_MULT  = 1.05    # enemy3 (vermelho)  ← ajuste aqui
+TARGET_LARGE_HEIGHT_MULT  = 0.89   # enemy3 (vermelho)  ← ajuste aqui
 ENEMY_SCALE_LARGE  = TARGET_LARGE_HEIGHT_MULT
-ENEMY_SCALE_XLARGE = 1.40    # enemy4  ← ajuste aqui
+ENEMY_SCALE_XLARGE = 0.95    # enemy4  ← ajuste aqui
 
 def _etarget_h(scale):
     """Altura-alvo em pixels para um inimigo com este multiplicador."""
@@ -121,6 +121,7 @@ GOAL_X_OFFSET = 250
 GOAL_SAFE_ZONE = 280
 GOAL_CLEAR_ZONE = 420
 GOAL_IMAGE_PATH = "images/goal/terminal.png"
+COIN_IMAGE_PATH = "images/coin/coin_3.png"
 
 BG_PATH = "images/background/bg_gameplay.png"
 
@@ -217,8 +218,8 @@ ENEMY_TYPES = [
         "size": (_etarget_h(ENEMY_SCALE_XLARGE), _etarget_h(ENEMY_SCALE_XLARGE)),  # referência
         "scale": ENEMY_SCALE_XLARGE,
         "color": (220, 60, 60),
-        "weight": 0.0,    # DESATIVADO
-        "faces_right": False,
+        "weight": 0.10,   # ← probabilidade de spawn (10%)
+        "faces_right": True,   # sprites olham para a DIREITA por padrão → flip p/ esquerda
         "y_offset": 0,
         "frames": [f"images/enemies/enemy4/enemy_4_sprite{i}.png" for i in range(1, 7)],
     },
@@ -591,8 +592,9 @@ class Enemy:
 
 
 class Coin:
-    def __init__(self, world_w):
+    def __init__(self, world_w, image=None):
         self.r = 12
+        self.image = image
         self.x = random.randint(220, world_w - 60)
         self.y = random.randint(200, GROUND_Y - 40)
         self.rect = pygame.Rect(int(self.x - self.r), int(self.y - self.r), self.r * 2, self.r * 2)
@@ -603,8 +605,11 @@ class Coin:
 
     def draw(self, surface, camera):
         cx, cy = camera.apply_pos(self.x, self.y)
-        pygame.draw.circle(surface, YELLOW, (cx, cy), self.r)
-        pygame.draw.circle(surface, BLACK, (cx, cy), self.r, 2)
+        if self.image:
+            surface.blit(self.image, (cx - self.r, cy - self.r))
+        else:
+            pygame.draw.circle(surface, YELLOW, (cx, cy), self.r)
+            pygame.draw.circle(surface, BLACK, (cx, cy), self.r, 2)
 
 
 class Bullet:
@@ -1302,7 +1307,17 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
 
 
 def build_level():
-    coins = [Coin(WORLD_W) for _ in range(18)]
+    coin_img_path = os.path.join(os.path.dirname(__file__), "assets", COIN_IMAGE_PATH)
+    coin_size = 24  # diâmetro (r=12)
+    if os.path.exists(coin_img_path):
+        try:
+            _ci = pygame.image.load(coin_img_path).convert_alpha()
+            coin_image = pygame.transform.smoothscale(_ci, (coin_size, coin_size))
+        except Exception:
+            coin_image = None
+    else:
+        coin_image = None
+    coins = [Coin(WORLD_W, coin_image) for _ in range(18)]
     goal_x = WORLD_W - GOAL_X_OFFSET
     goal_y = GROUND_Y - GOAL_HEIGHT
     platforms, main_route, platform_debug = generate_reachable_platforms(WORLD_W, GROUND_Y, goal_x)
