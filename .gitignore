@@ -24,3 +24,9 @@ dist/
 # Logs
 *.log
 
+
+# Builds locais de distribuição
+LinuxBuild*/
+LinuxBuild.zip
+NeonFirewall*/
+*.zip

@@ -13,7 +13,7 @@ ASSETS_DIR = BASE_DIR / "assets"
 # =========================
 WIDTH, HEIGHT = 960, 540
 FPS = 60
-TITLE = "Python 2D Game Demo"
+TITLE = "Neon Firewall"
 
 WORLD_W = 7000
 WORLD_H = HEIGHT
@@ -76,11 +76,13 @@ IDLE_ANIM_INTERVAL  = 0.25   # segundos por frame de idle     ← ajuste aqui
 IDLE_WAIT_DURATION  = 3.0    # segundos de espera antes de animar ← ajuste aqui
 SHOOT_ANIM_INTERVAL = 0.06   # segundos por frame de tiro     ← ajuste aqui
 
-# Sprite sheet bullet
-BULLET_SHEET     = "images/bullets/shooties-alpha.png"
-BULLET_FRAME_W   = 16    # largura de cada frame de bullet
-BULLET_FRAME_H   = 32    # altura de cada frame de bullet
-BULLET_FRAME_IDX = 3     # índice do frame a usar (0–6)
+# Sprite sheet de bullet (4 frames, 250x200 cada)
+BULLET_IMAGE     = "images/bullets/shooties-big.png"
+BULLET_FRAME_W   = 250   # largura de cada frame  ← ajuste se necessário
+BULLET_FRAME_H   = 200   # altura de cada frame   ← ajuste se necessário
+BULLET_FRAME_IDX = 0     # frame a usar (0–3)     ← ajuste aqui
+BULLET_SCALE_W   = 36    # largura final em pixels ← ajuste aqui
+BULLET_SCALE_H   = 18    # altura final em pixels  ← ajuste aqui
 
 MAX_JUMP_HEIGHT = int((abs(PLAYER_JUMP_FORCE) ** 2) / (2 * GRAVITY))
 MAX_JUMP_DISTANCE = int(PLAYER_SPEED * (2 * (abs(PLAYER_JUMP_FORCE) / GRAVITY)))
@@ -168,6 +170,16 @@ DEBUG_ENEMIES      = False    # ← True para ver seta de direção e vx acima d
 DEBUG_ENEMY_SPAWN  = False    # ← True para printar eventos de spawn no terminal
 SCORE_KILL        = 20   # pontos por matar um inimigo     ← ajuste aqui
 SCORE_COLLECTIBLE = 50   # pontos por coletar um item      ← ajuste aqui
+PLAYER_MAX_LIVES  = 3    # ← vidas máximas do player (morre na 3ª batida)
+
+# =========================
+# Fontes
+# =========================
+HUD_FONT_PATH   = "fonts/Orbitron-Regular.ttf"  # ← relativo a assets/
+TITLE_FONT_PATH = "fonts/Orbitron-Bold.ttf"     # ← fallback automático p/ Regular se inexistente
+HUD_FONT_SIZE   = 24   # ← tamanho do HUD (score, tempo)
+SMALL_FONT_SIZE = 18   # ← tamanho de textos secundários
+TITLE_FONT_SIZE = 54   # ← tamanho dos títulos (menu, game over)
 
 # 4 tipos de inimigos: enemy1 (fraco) → enemy4 (forte)
 ENEMY_TYPES = [
@@ -818,6 +830,30 @@ def load_sound(relative_path):
         return None
 
 
+def load_font(rel_path, size, fallback_name="arial"):
+    """
+    Carrega uma fonte TrueType de assets/<rel_path>.
+    Se o arquivo não existir ou falhar, usa pygame.font.SysFont(fallback_name, size).
+    Para TITLE_FONT_PATH (Bold), tenta automaticamente HUD_FONT_PATH (Regular) como
+    segundo fallback antes de recorrer ao SysFont do sistema.
+    """
+    full = str(ASSETS_DIR / rel_path)
+    if os.path.exists(full):
+        try:
+            return pygame.font.Font(full, size)
+        except Exception:
+            pass
+    # Segundo fallback: se era a fonte Bold, tenta Regular
+    if rel_path == TITLE_FONT_PATH:
+        fallback_full = str(ASSETS_DIR / HUD_FONT_PATH)
+        if os.path.exists(fallback_full):
+            try:
+                return pygame.font.Font(fallback_full, size)
+            except Exception:
+                pass
+    return pygame.font.SysFont(fallback_name, size)
+
+
 def cut_sheet(sheet, col, row, frame_w, frame_h):
     """Extrai uma subimagem de um sprite sheet baseado em coluna e linha."""
     return sheet.subsurface(pygame.Rect(col * frame_w, row * frame_h, frame_w, frame_h)).copy()
@@ -1020,22 +1056,54 @@ def load_player_sprite_set(scale=PLAYER_SCALE, feet_offset=PLAYER_FEET_OFFSET):
 
 def load_bullet_sprite():
     """
-    Carrega sprite de bullet do shooties sheet.
-    Ajuste BULLET_FRAME_IDX (0-6) para trocar o estilo de projetil.
-    Retorna surface ou None (usa retangulo amarelo como fallback).
+    Carrega um frame do sheet shooties-big.png (4 frames de 250x200).
+    Ajuste BULLET_FRAME_IDX (0-3) para escolher o estilo do projétil.
+    Retorna surface ou None (usa retângulo amarelo como fallback).
     """
-    path = os.path.join(os.path.dirname(__file__), "assets", BULLET_SHEET)
+    path = os.path.join(os.path.dirname(__file__), "assets", BULLET_IMAGE)
     if not os.path.exists(path):
-        print(f"[bullet] Sheet nao encontrado: {BULLET_SHEET}. Usando fallback retangulo.")
+        print(f"[bullet] Imagem nao encontrada: {BULLET_IMAGE}. Usando fallback retangulo.")
         return None
     try:
-        sheet = pygame.image.load(path).convert_alpha()
+        # convert() sem alpha — necessário para colorkey funcionar corretamente
+        sheet = pygame.image.load(path).convert()
+        sheet.set_colorkey((0, 0, 0))          # remove fundo preto no sheet inteiro
         frame = cut_sheet(sheet, BULLET_FRAME_IDX, 0, BULLET_FRAME_W, BULLET_FRAME_H)
-        print(f"[bullet] Sprite carregado: frame {BULLET_FRAME_IDX} ({BULLET_FRAME_W}x{BULLET_FRAME_H})")
+        # Escala com nearest-neighbor para não misturar pixels pretos nas bordas
+        frame = pygame.transform.scale(frame, (BULLET_SCALE_W, BULLET_SCALE_H))
+        frame.set_colorkey((0, 0, 0))          # garante colorkey na surface final
+        print(f"[bullet] Frame {BULLET_FRAME_IDX} carregado e escalado para {frame.get_size()}")
         return frame
     except Exception as e:
         print(f"[bullet] Erro ao carregar bullet sprite: {e}")
         return None
+
+
+def draw_neon_title(surface, font, cx, y):
+    """
+    Desenha 'NEON' em ciano e 'FIREWALL' em roxo neon com efeito de brilho.
+    cx = centro horizontal, y = posição vertical.
+    """
+    GLOW_OFFSETS = [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, -3), (0, 3), (-3, 0), (3, 0)]
+    parts = [
+        ("NEON ",    PLATFORM_TOP,  (0, 120, 140)),   # ciano neon + glow escuro
+        ("FIREWALL", PLATFORM_GLOW, (80, 0, 130)),    # roxo neon + glow escuro
+    ]
+    # Mede largura total para centralizar
+    surfs = [(font.render(txt, True, col), font.render(txt, True, glow))
+             for txt, col, glow in parts]
+    total_w = sum(s.get_width() for s, _ in surfs)
+    x = cx - total_w // 2
+
+    for (main_surf, glow_surf), (_, _, _) in zip(surfs, parts):
+        w = main_surf.get_width()
+        h = main_surf.get_height()
+        # Brilho (glow): cópias levemente deslocadas em cor escura saturada
+        for ox, oy in GLOW_OFFSETS:
+            surface.blit(glow_surf, (x + ox, y + oy))
+        # Texto principal
+        surface.blit(main_surf, (x, y))
+        x += w
 
 
 def draw_menu(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui):
@@ -1047,7 +1115,7 @@ def draw_menu(screen, menu_bg, buttons, selected_button_idx, font_title, font_ui
     overlay.set_alpha(100)
     overlay.fill(BLACK)
     screen.blit(overlay, (0, 0))
-    draw_text(screen, "PYTHON 2D GAME DEMO", font_title, WHITE, WIDTH // 2, 80, center=True)
+    draw_neon_title(screen, font_title, WIDTH // 2, 60)
     for idx, button in enumerate(buttons):
         is_selected = (idx == selected_button_idx)
         draw_button(screen, button, font_ui, selected=is_selected)
@@ -1063,8 +1131,8 @@ def draw_controls_screen(screen, menu_bg, back_button, selected, font_title, fon
 
     draw_text(screen, "CONTROLES", font_title, PLATFORM_TOP, WIDTH // 2, 60, center=True)
 
-    font_label = pygame.font.SysFont("arial", 20, bold=True)
-    font_val   = pygame.font.SysFont("arial", 20)
+    font_label = load_font(TITLE_FONT_PATH, SMALL_FONT_SIZE)
+    font_val   = load_font(HUD_FONT_PATH,   SMALL_FONT_SIZE)
     cx = WIDTH // 2
     entries = [
         ("Mover",        "A / D   ou   ← / →"),
@@ -1114,13 +1182,60 @@ def draw_generic_menu_screen(screen, menu_bg, buttons, selected_button_idx, font
     
     # Subtítulo se fornecido
     if subtitle:
-        draw_text(screen, subtitle, pygame.font.SysFont("arial", 22), YELLOW, 
+        draw_text(screen, subtitle, load_font(HUD_FONT_PATH, SMALL_FONT_SIZE), YELLOW,
                  WIDTH // 2, 160, center=True)
     
     # Desenhar botões
     for idx, button in enumerate(buttons):
         is_selected = (idx == selected_button_idx)
         draw_button(screen, button, font_ui, selected=is_selected)
+
+
+def draw_hud(surface, font_ui, font_small, score, player_lives, time_survived, kills,
+            player_invincible_timer, max_lives=3, width=WIDTH, progress=0.0):
+    """Desenha o HUD principal: vidas, score e tempo de jogo."""
+    hud_h = 50
+    # Painel semi-transparente
+    hud_bg = pygame.Surface((width, hud_h), pygame.SRCALPHA)
+    hud_bg.fill((8, 12, 28, 200))
+    surface.blit(hud_bg, (0, 0))
+    # Linha neon ciano na base do painel
+    pygame.draw.line(surface, PLATFORM_TOP, (0, hud_h), (width, hud_h), 2)
+
+    cy = hud_h // 2  # centro vertical
+
+    # --- VIDAS (esquerda) ---
+    # SysFont mantido aqui para garantir renderização correta do glifo ♥
+    heart_font = pygame.font.SysFont("arial", 30, bold=True)
+    lbl = font_small.render("VIDAS", True, (180, 180, 200))
+    surface.blit(lbl, lbl.get_rect(midleft=(14, cy)))
+    hx = 14 + lbl.get_width() + 8
+    for i in range(max_lives):
+        alive = i < player_lives
+        blink_skip = (alive and i == player_lives - 1
+                      and player_invincible_timer > 0
+                      and int(player_invincible_timer * 8) % 2 == 0)
+        color = (225, 55, 55) if (alive and not blink_skip) else (55, 55, 80)
+        h_surf = heart_font.render("\u2665", True, color)
+        surface.blit(h_surf, h_surf.get_rect(midleft=(hx, cy)))
+        hx += h_surf.get_width() + 3
+
+    # --- SCORE (centro) ---
+    score_surf = font_ui.render(f"SCORE  {score:06d}", True, YELLOW)
+    surface.blit(score_surf, score_surf.get_rect(center=(width // 2, cy)))
+
+    # --- TEMPO (direita) ---
+    mins = int(time_survived) // 60
+    secs = int(time_survived) % 60
+    time_surf = font_ui.render(f"{mins:02d}:{secs:02d}", True, WHITE)
+    surface.blit(time_surf, time_surf.get_rect(midright=(width - 14, cy)))
+
+    # Barra de progresso (fina, logo abaixo do painel)
+    bar_y = hud_h + 2
+    pygame.draw.rect(surface, (30, 35, 60), (0, bar_y, width, 3))
+    bar_w = int(width * max(0.0, min(1.0, progress / 100.0)))
+    if bar_w > 0:
+        pygame.draw.rect(surface, PLATFORM_GLOW, (0, bar_y, bar_w, 3))
 
 
 def handle_generic_screen_input(event, screen_state, num_buttons=3):
@@ -1446,9 +1561,9 @@ def main():
     pygame.display.set_caption(TITLE)
     clock = pygame.time.Clock()
 
-    font_title = pygame.font.SysFont("arial", 54, bold=True)
-    font_ui = pygame.font.SysFont("arial", 28)
-    font_small = pygame.font.SysFont("arial", 22)
+    font_title = load_font(TITLE_FONT_PATH, TITLE_FONT_SIZE)  # ← Orbitron-Bold (ou fallback)
+    font_ui    = load_font(HUD_FONT_PATH,   HUD_FONT_SIZE)    # ← Orbitron-Regular 24px
+    font_small = load_font(HUD_FONT_PATH,   SMALL_FONT_SIZE)  # ← Orbitron-Regular 18px
 
     state = MENU
 
@@ -1514,6 +1629,8 @@ def main():
     score = 0
     best_score = 0
     time_survived = 0.0
+    player_lives = PLAYER_MAX_LIVES
+    player_invincible_timer = 0.0
 
     running = True
     while running:
@@ -1531,12 +1648,15 @@ def main():
                 def _start_game():
                     nonlocal player, coins, platforms, main_route, platform_debug, goal
                     nonlocal bullets, enemies, effects, spawn_manager, kills, score, time_survived, state
+                    nonlocal player_lives, player_invincible_timer
                     player = Player(sprites=player_sprites)
                     coins, platforms, main_route, platform_debug, goal = build_level()
                     bullets = []; enemies = []; effects = []
                     spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
                     goal.image = goal_image
                     kills = 0; score = 0; time_survived = 0.0
+                    player_lives = PLAYER_MAX_LIVES
+                    player_invincible_timer = 0.0
                     state = PLAYING
 
                 if action == 'play':
@@ -1577,7 +1697,7 @@ def main():
                 if event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_SPACE, pygame.K_w, pygame.K_UP):
                         player.jump()
-                    elif event.key == pygame.K_f:
+                    elif event.key == pygame.K_f and not player.is_shooting:
                         bdir = 1 if player.direction == "right" else -1
                         bx = player.x + player.w if bdir == 1 else player.x
                         by_offset = 0.75 if player.crouching else 0.5
@@ -1610,6 +1730,8 @@ def main():
                         kills = 0
                         score = 0
                         time_survived = 0.0
+                        player_lives = PLAYER_MAX_LIVES
+                        player_invincible_timer = 0.0
                         state = PLAYING
                     elif action_idx == 1:  # MENU PRINCIPAL
                         state = MENU
@@ -1633,6 +1755,8 @@ def main():
                                 kills = 0
                                 score = 0
                                 time_survived = 0.0
+                                player_lives = PLAYER_MAX_LIVES
+                                player_invincible_timer = 0.0
                                 state = PLAYING
                             elif idx == 1:  # MENU PRINCIPAL
                                 state = MENU
@@ -1714,13 +1838,18 @@ def main():
                         kills += 1
 
 
-            # Colisão com inimigos => Game Over (usa hitboxes menores = mais justo)
-            for enemy in enemies:
-                if player.hitbox.colliderect(enemy.hitbox):
-                    spawn_manager.notify_player_hit()
-                    best_score = max(best_score, score)
-                    state = GAME_OVER
-                    break
+            # Colisão com inimigos => perde 1 vida (usa hitboxes menores = mais justo)
+            if player_invincible_timer <= 0:
+                for enemy in enemies:
+                    if player.hitbox.colliderect(enemy.hitbox):
+                        player_lives -= 1
+                        player_invincible_timer = RESPITE_AFTER_HIT
+                        spawn_manager.notify_player_hit()
+                        if player_lives <= 0:
+                            best_score = max(best_score, score)
+                            state = GAME_OVER
+                        break
+            player_invincible_timer = max(0.0, player_invincible_timer - dt)
 
             # Coletar moedas
             remaining_coins = []
@@ -1802,7 +1931,9 @@ def main():
                         200,
                     )
 
-            player.draw(screen, camera)
+            # Pisca o player durante invencibilidade pós-hit
+            if player_invincible_timer <= 0 or int(player_invincible_timer * 10) % 2 == 0:
+                player.draw(screen, camera)
 
             for enemy in enemies:
                 enemy.draw(screen, camera, font=font_small)
@@ -1816,12 +1947,9 @@ def main():
                 radius = int(10 * (effect["ttl"] / HIT_FLASH_TIME)) + 4
                 pygame.draw.circle(screen, WHITE, (cx, cy), radius, 2)
 
-            draw_text(screen, f"Score: {score}", font_ui, WHITE, 20, 18)
-            draw_text(screen, f"Tempo: {time_survived:05.1f}s", font_small, WHITE, 20, 52)
-            draw_text(screen, f"Zumbis derrotados: {kills}", font_small, WHITE, 20, 78)
             progress = clamp((player.rect.centerx / WORLD_W) * 100, 0, 100)
-            draw_text(screen, f"Progresso: {progress:05.1f}%", font_small, WHITE, WIDTH - 220, 52)
-            draw_text(screen, "Objetivo: alcançar o terminal no fim do mapa", font_small, GRAY, WIDTH - 420, 78)
+            draw_hud(screen, font_ui, font_small, score, player_lives, time_survived, kills,
+                     player_invincible_timer, max_lives=PLAYER_MAX_LIVES, width=WIDTH, progress=progress)
             if DEBUG_UI:
                 draw_text(
                     screen,
@@ -1840,12 +1968,14 @@ def main():
                     20,
                     152,
                 )
-            draw_text(screen, "ESC - Menu", font_small, GRAY, WIDTH - 160, 20)
+
 
         elif state == GAME_OVER:
             # Reutilizar função genérica com dados específicos de GAME_OVER
             best_score = max(best_score, score)
-            subtitle = f"Score: {score} | Zumbis: {kills} | Melhor: {best_score}"
+            mins_s = int(time_survived) // 60
+            secs_s = int(time_survived) % 60
+            subtitle = f"Score: {score}  |  Tempo: {mins_s:02d}:{secs_s:02d}  |  Zumbis: {kills}  |  Melhor: {best_score}"
             draw_generic_menu_screen(screen, menu_bg, game_over_buttons, game_over_state["selected"],
                                     font_title, font_ui, "GAME OVER", subtitle=subtitle)
 
