@@ -1623,7 +1623,16 @@ def main():
             else:
                 type_frames.append(load_image(p, cfg["size"]))
         all_enemy_frames.append(type_frames)
-    hit_sfx = load_sound("sound/hit.wav")
+    hit_sfx   = load_sound("sound/hit.wav")
+    shoot_sfx = load_sound("sound/shoot.wav")
+    # Música de fundo
+    _music_path = os.path.join(os.path.dirname(__file__), "assets", "sound", "dj_synth_wave.mp3")
+    if os.path.exists(_music_path):
+        try:
+            pygame.mixer.music.load(_music_path)
+            pygame.mixer.music.set_volume(0.45)
+        except pygame.error:
+            pass
     spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
     kills = 0
     score = 0
@@ -1633,8 +1642,17 @@ def main():
     player_invincible_timer = 0.0
 
     running = True
+    _prev_state = state
     while running:
         dt = clock.tick(FPS) / 1000.0  # segundos por frame
+
+        # ========= Controle de música por estado =========
+        if state != _prev_state:
+            if state == PLAYING and _prev_state != PLAYING:
+                pygame.mixer.music.play(-1)
+            elif state != PLAYING and _prev_state == PLAYING:
+                pygame.mixer.music.stop()
+            _prev_state = state
 
         # ========= Eventos =========
         for event in pygame.event.get():
@@ -1704,6 +1722,8 @@ def main():
                         bullets.append(Bullet(bx, player.y + player.h * by_offset,
                                               direction=bdir, sprite=bullet_sprite))
                         player.trigger_shoot()
+                        if shoot_sfx:
+                            shoot_sfx.play()
                     elif event.key == pygame.K_ESCAPE:
                         state = MENU
 
