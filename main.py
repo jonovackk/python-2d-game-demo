@@ -1681,6 +1681,7 @@ def main():
     kills = 0
     score = 0
     best_score = 0
+    next_life_score = 1000   # próximo threshold de recuperação de coração
     time_survived = 0.0
     player_lives = PLAYER_MAX_LIVES
     player_invincible_timer = 0.0
@@ -1716,7 +1717,7 @@ def main():
                     bullets = []; enemies = []; effects = []
                     spawn_manager = SpawnManager(WORLD_W, WIDTH, goal.x)
                     goal.image = goal_image
-                    kills = 0; score = 0; time_survived = 0.0
+                    kills = 0; score = 0; next_life_score = 1000; time_survived = 0.0
                     player_lives = PLAYER_MAX_LIVES
                     player_invincible_timer = 0.0
                     state = PLAYING
@@ -1793,6 +1794,7 @@ def main():
                         goal.image = goal_image
                         kills = 0
                         score = 0
+                        next_life_score = 1000
                         time_survived = 0.0
                         player_lives = PLAYER_MAX_LIVES
                         player_invincible_timer = 0.0
@@ -1818,6 +1820,7 @@ def main():
                                 goal.image = goal_image
                                 kills = 0
                                 score = 0
+                                next_life_score = 1000
                                 time_survived = 0.0
                                 player_lives = PLAYER_MAX_LIVES
                                 player_invincible_timer = 0.0
@@ -1924,6 +1927,14 @@ def main():
                     remaining_coins.append(c)
             coins = remaining_coins
 
+            # --- Recuperação de vida a cada 1000 pontos ---
+            while score >= next_life_score:
+                if player_lives < PLAYER_MAX_LIVES:
+                    player_lives += 1      # recupera coração perdido
+                else:
+                    player_lives += 1      # coração extra (além do máximo)
+                next_life_score += 1000
+
             time_survived += dt
 
             # Efeitos de hit
@@ -2013,7 +2024,7 @@ def main():
 
             progress = clamp((player.rect.centerx / WORLD_W) * 100, 0, 100)
             draw_hud(screen, font_ui, font_small, score, player_lives, time_survived, kills,
-                     player_invincible_timer, max_lives=PLAYER_MAX_LIVES, width=WIDTH, progress=progress)
+                     player_invincible_timer, max_lives=max(player_lives, PLAYER_MAX_LIVES), width=WIDTH, progress=progress)
             if DEBUG_UI:
                 draw_text(
                     screen,
