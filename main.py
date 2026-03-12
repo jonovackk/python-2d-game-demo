@@ -87,23 +87,35 @@ BULLET_SCALE_H   = 18    # altura final em pixels  ← ajuste aqui
 MAX_JUMP_HEIGHT = int((abs(PLAYER_JUMP_FORCE) ** 2) / (2 * GRAVITY))
 MAX_JUMP_DISTANCE = int(PLAYER_SPEED * (2 * (abs(PLAYER_JUMP_FORCE) / GRAVITY)))
 
-PLATFORM_DENSITY = 0.45
+PLATFORM_DENSITY = 0.55
 PLATFORM_MIN_WIDTH = 80
 PLATFORM_MAX_WIDTH = 150
 PLATFORM_MIN_GAP_X = 90
-PLATFORM_MAX_GAP_X = 220
+PLATFORM_MAX_GAP_X = 140
 PLATFORM_MIN_STEP_UP = 20
-PLATFORM_MAX_STEP_UP = int(MAX_JUMP_HEIGHT * 0.7)
-PLATFORM_MAX_STEP_DOWN = 90
+PLATFORM_MAX_STEP_UP = int(MAX_JUMP_HEIGHT * 0.50)
+PLATFORM_MAX_STEP_DOWN = 60
 PLATFORM_MARGIN_TOP = 80
 PLATFORM_MARGIN_BOTTOM = 120
-MAX_CONSECUTIVE_HIGH = 2
+MAX_CONSECUTIVE_HIGH = 1
 BREAK_ZONE_MIN = 700
 BREAK_ZONE_MAX = 1100
 BREAK_ZONE_LENGTH_MIN = 220
 BREAK_ZONE_LENGTH_MAX = 320
 PLATFORM_CHUNK_SIZE = 500
 PLATFORM_MAX_PER_CHUNK = 3
+# ── Geração por segmento ────────────────────────────────────────
+SEGMENT_W_MIN   = 200   # px ← largura mín. de cada segmento
+SEGMENT_W_MAX   = 280   # px ← largura máx. de cada segmento
+SEG_PLAIN_PROB  = 0.70  # 70% chão plano  ← ajuste aqui
+SEG_COVER_PROB  = 0.10  # 10% obstáculo   ← ajuste aqui
+SEG_REACH_PROB  = 0.12  # 12% plataforma  ← (8% restante = decorativa)
+COVER_H_MIN     = 14    # px altura mín. da caixa  ← ajuste aqui
+COVER_H_MAX     = 22    # px altura máx. da caixa  ← ajuste aqui
+COVER_W_MIN     = 40    # px largura mín. da caixa ← ajuste aqui
+COVER_W_MAX     = 80    # px largura máx. da caixa ← ajuste aqui
+REACH_ABOVE_MIN = 40    # px acima do chão (mínimo) ← ajuste aqui
+REACH_ABOVE_MAX = 90    # px acima do chão (máximo) ← ajuste aqui
 
 DEBUG_PLATFORMS = False  # Desativa overlays de debug: índices, linhas conectadas, info de chunk
 DEBUG_HITBOX = False     # True → mostra hitbox amarela (inimigo) e verde (player)
@@ -144,11 +156,22 @@ RED = (220, 90, 90)
 YELLOW = (240, 200, 80)
 GRAY = (120, 120, 120)
 
-# Cores das plataformas - Neon Cyber
-PLATFORM_FILL = (36, 52, 92)         # azul escuro
-PLATFORM_TOP = (0, 232, 255)         # ciano neon
-PLATFORM_GLOW = (178, 68, 255)       # roxo neon (detalhe)
+# Cores das plataformas - Neon Cyber (chão e UI)
+PLATFORM_FILL   = (36, 52, 92)       # azul escuro
+PLATFORM_TOP    = (0, 232, 255)      # ciano neon
+PLATFORM_GLOW   = (178, 68, 255)     # roxo neon (detalhe)
 PLATFORM_SHADOW = (12, 18, 40)       # sombra
+# Tipo: reachable (verde escuro — plataforma elevada alcançável)
+PLATFORM_REACH_FILL   = (18, 52, 28)   # verde escuro
+PLATFORM_REACH_TOP    = (60, 210, 90)  # verde neon (borda iluminada)
+PLATFORM_REACH_SHADOW = (6, 16, 10)
+# Tipo: cover (amarelo/bege escuro — obstáculo/caixa)
+PLATFORM_COVER_FILL   = (55, 44, 18)
+PLATFORM_COVER_TOP    = (170, 138, 52)
+PLATFORM_COVER_SHADOW = (20, 14, 4)
+# Tipo: decorative (azul muito escuro — fundo de cenário, sem colisão)
+PLATFORM_DECO_FILL    = (14, 20, 38)
+PLATFORM_DECO_TOP     = (26, 36, 66)
 
 CAMERA_DEAD_LEFT_RATIO = 0.28
 CAMERA_DEAD_RIGHT_RATIO = 0.52
@@ -440,10 +463,12 @@ class Player:
         else:
             self.on_ground = False
 
-        # Colisão com plataformas (apenas aterrissagem)
+        # Colisão com plataformas (apenas aterrissagem; decorativas ignoradas)
         if self.vy >= 0:
             for platform in platforms:
-                if self.rect.right <= platform.rect.left or self.rect.left >= platform.rect.right:
+                if not platform.collidable:
+                    continue
+                if self.hitbox.right <= platform.rect.left or self.hitbox.left >= platform.rect.right:
                     continue
                 if prev_bottom <= platform.rect.top and self.y + self.h >= platform.rect.top:
                     self.y = platform.rect.top - self.h + PLAYER_FEET_OFFSET
@@ -656,34 +681,55 @@ class Bullet:
 
 
 class Platform:
-    def __init__(self, x, y, w, h):
+    """
+    kind:
+      'reachable'  – plataforma elevada verde escuro, COM colisão
+      'cover'      – obstáculo baixo amarelo/bege, COM colisão
+      'decorative' – fundo de cenário azul muito escuro, SEM colisão
+    """
+    def __init__(self, x, y, w, h, kind='reachable'):
         self.rect = pygame.Rect(int(x), int(y), int(w), int(h))
+        self.kind = kind
+        self.collidable = (kind != 'decorative')
 
     def draw(self, surface, camera):
         screen_rect = camera.apply_rect(self.rect)
-        
-        # Sombra deslocada (3 px para baixo)
-        shadow_rect = screen_rect.copy()
-        shadow_rect.y += 3
-        pygame.draw.rect(surface, PLATFORM_SHADOW, shadow_rect, border_radius=6)
-        
-        # Corpo principal - azul escuro
-        pygame.draw.rect(surface, PLATFORM_FILL, screen_rect, border_radius=6)
-        
-        # Linha superior neon - 3 px de altura
+
+        if self.kind == 'decorative':
+            pygame.draw.rect(surface, PLATFORM_DECO_FILL, screen_rect, border_radius=3)
+            if screen_rect.h >= 2:
+                pygame.draw.rect(surface, PLATFORM_DECO_TOP,
+                                 pygame.Rect(screen_rect.x, screen_rect.y, screen_rect.w, 2))
+            return
+
+        if self.kind == 'cover':
+            shadow = screen_rect.move(0, 2)
+            pygame.draw.rect(surface, PLATFORM_COVER_SHADOW, shadow, border_radius=4)
+            pygame.draw.rect(surface, PLATFORM_COVER_FILL, screen_rect, border_radius=4)
+            if screen_rect.h >= 3:
+                pygame.draw.rect(surface, PLATFORM_COVER_TOP,
+                                 pygame.Rect(screen_rect.x, screen_rect.y, screen_rect.w, 3))
+            # linhas verticais estilo grade
+            if screen_rect.w >= 24:
+                for bx in range(screen_rect.x + 16, screen_rect.right - 8, 16):
+                    pygame.draw.line(surface, PLATFORM_COVER_SHADOW,
+                                     (bx, screen_rect.y + 3), (bx, screen_rect.bottom - 1), 1)
+            if DEBUG_HITBOX:
+                pygame.draw.rect(surface, YELLOW, screen_rect, width=2)
+            return
+
+        # 'reachable' – verde escuro com borda iluminada
+        shadow_rect = screen_rect.move(0, 3)
+        pygame.draw.rect(surface, PLATFORM_REACH_SHADOW, shadow_rect, border_radius=6)
+        pygame.draw.rect(surface, PLATFORM_REACH_FILL, screen_rect, border_radius=6)
         if screen_rect.h >= 3:
-            top_line = pygame.Rect(screen_rect.x, screen_rect.y, screen_rect.w, 3)
-            pygame.draw.rect(surface, PLATFORM_TOP, top_line)
-        
-        # Detalhe roxo neon no centro (1 linha curta, 60% da largura)
+            pygame.draw.rect(surface, PLATFORM_REACH_TOP,
+                             pygame.Rect(screen_rect.x, screen_rect.y, screen_rect.w, 3))
         if screen_rect.h >= 8 and screen_rect.w >= 20:
-            center_y = screen_rect.centery
             detail_w = int(screen_rect.w * 0.6)
             detail_x = screen_rect.x + (screen_rect.w - detail_w) // 2
-            detail_rect = pygame.Rect(detail_x, center_y - 1, detail_w, 2)
-            pygame.draw.rect(surface, PLATFORM_GLOW, detail_rect)
-        
-        # Debug: desenhar hitbox contorno em amarelo
+            pygame.draw.rect(surface, PLATFORM_GLOW,
+                             pygame.Rect(detail_x, screen_rect.centery - 1, detail_w, 2))
         if DEBUG_HITBOX:
             pygame.draw.rect(surface, YELLOW, screen_rect, width=2)
 
@@ -1298,7 +1344,6 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
     main_route = []
 
     def overlaps_any(rect, existing, h_pad=8, v_pad=20):
-        """Retorna True se 'rect' sobrépõe qualquer plataforma existente."""
         expanded = rect.inflate(h_pad * 2, v_pad * 2)
         return any(expanded.colliderect(p.rect) for p in existing)
 
@@ -1312,10 +1357,10 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
     if playable_y_max <= playable_y_min:
         playable_y_max = ground_y - 40
 
-    low = playable_y_max
-    mid = clamp(playable_y_max - int(MAX_JUMP_HEIGHT * 0.5), playable_y_min, playable_y_max)
-    high = clamp(playable_y_max - int(MAX_JUMP_HEIGHT * 0.9), playable_y_min, playable_y_max)
-    lanes = [(low, 0.5), (mid, 0.35), (high, 0.15)]
+    low  = playable_y_max
+    mid  = clamp(playable_y_max - int(MAX_JUMP_HEIGHT * 0.35), playable_y_min, playable_y_max)
+    high = clamp(playable_y_max - int(MAX_JUMP_HEIGHT * 0.45), playable_y_min, playable_y_max)
+    lanes = [(low, 0.60), (mid, 0.32), (high, 0.08)]
 
     def pick_lane():
         roll = rng.random()
@@ -1329,7 +1374,7 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
     x = 120
     y = low
     width = rng.randint(PLATFORM_MIN_WIDTH, PLATFORM_MAX_WIDTH)
-    platform = Platform(x, y, width, 16)
+    platform = Platform(x, y, width, 16, kind='reachable')
     platforms.append(platform)
     main_route.append(platform)
 
@@ -1368,7 +1413,7 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
             should_spawn = False
 
         if should_spawn and x < end_limit:
-            candidate = Platform(x, y, width, 16)
+            candidate = Platform(x, y, width, 16, kind='reachable')
             if not overlaps_any(candidate.rect, platforms):
                 platform = candidate
                 platforms.append(platform)
@@ -1382,7 +1427,7 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
             branch_chunk = int(branch_x // PLATFORM_CHUNK_SIZE)
             chunk_counts.setdefault(branch_chunk, 0)
             if branch_x < end_limit and branch_x + branch_w < world_w - 50 and chunk_counts[branch_chunk] < PLATFORM_MAX_PER_CHUNK:
-                candidate_b = Platform(branch_x, branch_y, branch_w, 16)
+                candidate_b = Platform(branch_x, branch_y, branch_w, 16, kind='reachable')
                 if not overlaps_any(candidate_b.rect, platforms):
                     platforms.append(candidate_b)
                     chunk_counts[branch_chunk] += 1
@@ -1404,7 +1449,6 @@ def generate_reachable_platforms(world_w, ground_y, goal_x, seed=None):
 
         cur.y = clamp(cur.y, playable_y_min, playable_y_max)
 
-    # Remover sobreposições residuais (ex.: branch perto de plataforma ajustada)
     clean = []
     for p in platforms:
         expanded = p.rect.inflate(8 * 2, 20 * 2)

@@ -1,0 +1,75 @@
+name: Build & Release Windows EXE
+
+# Dispara quando você cria uma tag do tipo v1.0.0
+# Exemplo: git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags:
+      - 'v*'
+  # Permite rodar manualmente pelo GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão do release (ex: v1.0.0)'
+        required: true
+        default: 'v0.0.0'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Baixa o código fonte (privado)
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 2. Configura Python 3.10
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. Instala dependências
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # 4. Compila o .exe (arquivo único)
+      - name: Build EXE with PyInstaller
+        run: pyinstaller main_windows.spec
+
+      # 5. Zipa o executável junto com os assets para distribuição
+      #    (PyInstaller onefile já inclui os assets internamente,
+      #     mas zipamos para o download ser um único arquivo)
+      - name: Package release
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ github.event.inputs.version }}"
+          }
+          Compress-Archive -Path dist\NeonFirewall.exe -DestinationPath "NeonFirewall-$version-windows.zip"
+        shell: pwsh
+
+      # 6. Publica o release no repositório de DISTRIBUIÇÃO (público)
+      #    Requer um Personal Access Token com permissão "contents: write"
+      #    no repo de distribuição, salvo como secret DIST_REPO_TOKEN
+      - name: Publish release to distribution repo
+        env:
+          GH_TOKEN: ${{ secrets.DIST_REPO_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ github.event.inputs.version }}"
+          }
+
+          # Substitua pelo seu usuario/repo-publico-de-distribuicao
+          $distRepo = "${{ secrets.DIST_REPO }}"
+
+          gh release create "$version" `
+            --repo "$distRepo" `
+            --title "Neon Firewall $version" `
+            --notes "Release automático gerado pelo build pipeline." `
+            "NeonFirewall-$version-windows.zip"
+        shell: pwsh

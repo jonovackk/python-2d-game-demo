@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv-*/
 venv/
 env/
 
@@ -19,7 +20,8 @@ Thumbs.db
 # Build outputs
 build/
 dist/
-*.spec
+# Ignorar spec gerado pelo PyInstaller, mas manter main_windows.spec no repo
+main.spec
 
 # Logs
 *.log
