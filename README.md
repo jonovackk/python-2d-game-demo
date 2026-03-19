@@ -9,8 +9,7 @@
 
 | Menu | Gameplay |
 |---|---|
-| ![Menu](docs/Screenshot from 2026-03-19 10-11-14.png) | ![Gameplay](docs/Screenshot from 2026-03-19 10-11-37.png) |
-
+| ![Menu](docs/Screenshot%20from%202026-03-19%2010-11-14.png) | ![Gameplay](docs/Screenshot%20from%202026-03-19%2010-11-37.png) |
 ---
 
 ## 🕹️ Gameplay
