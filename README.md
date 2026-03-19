@@ -1,18 +1,18 @@
-# 🎮 Neon Firewall — Python 2D Game
+#  Neon Firewall — Python 2D Game
 
 > Side-scrolling action game built with Python and Pygame as a university project.  
 > Discipline: *Linguagem de Programação Aplicada* — UNINTER
 
 ---
 
-## 📸 Preview
+##  Preview
 
 | Menu | Gameplay |
 |---|---|
 | ![Menu](docs/Screenshot%20from%202026-03-19%2010-11-14.png) | ![Gameplay](docs/Screenshot%20from%202026-03-19%2010-11-37.png) |
 ---
 
-## 🕹️ Gameplay
+##  Gameplay
 
 You play as a hacker navigating a neon-lit cyberpunk world, shooting through waves of enemies to reach the exit terminal. The difficulty scales as you progress.
 
@@ -43,7 +43,7 @@ You play as a hacker navigating a neon-lit cyberpunk world, shooting through wav
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 The game is structured around a set of independent, reusable classes:
 
@@ -63,7 +63,7 @@ Supporting functions: `load_image`, `load_font`, `load_sound`, `load_background`
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 - **Python 3.x**
 - **Pygame** — rendering, input, sound, sprite handling
@@ -72,7 +72,7 @@ Supporting functions: `load_image`, `load_font`, `load_sound`, `load_background`
 
 ---
 
-## 🚀 How to Run
+##  How to Run
 
 ```bash
 # Clone the repository
@@ -90,7 +90,7 @@ python main.py
 
 ---
 
-## 📦 Build (Windows Executable)
+##  Build (Windows Executable)
 
 ```bash
 pyinstaller main_windows.spec
@@ -100,7 +100,7 @@ The packaged executable will be in the `dist/` folder.
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 python-2d-game-demo/
@@ -122,7 +122,7 @@ python-2d-game-demo/
 
 ---
 
-## 📝 Design Documentation
+##  Design Documentation
 
 The repository includes detailed markdown docs tracking design decisions made during development:
 
@@ -135,7 +135,7 @@ The repository includes detailed markdown docs tracking design decisions made du
 
 ---
 
-## 👤 Author
+##  Author
 
 **Jonathan Novack**  
 Systems Analysis & Development — UNINTER  
