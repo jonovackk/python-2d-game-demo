@@ -29,7 +29,7 @@ You play as a hacker navigating a neon-lit cyberpunk world, shooting through wav
 
 ---
 
-## ⚙️ Features
+##  Features
 
 - **4 enemy types** — each with unique HP, speed, sprite animations, and spawn weight
 - **Procedural level generation** — segments dynamically generated as plain ground, cover obstacles, and elevated reachable platforms
