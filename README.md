@@ -9,7 +9,7 @@
 
 | Menu | Gameplay |
 |---|---|
-| ![Menu](docs/screenshot_menu.png) | ![Gameplay](docs/screenshot_gameplay.png) |
+| ![Menu](docs/Screenshot from 2026-03-19 10-11-14.png) | ![Gameplay](docs/Screenshot from 2026-03-19 10-11-37.png) |
 
 ---
 
